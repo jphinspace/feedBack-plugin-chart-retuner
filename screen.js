@@ -23,10 +23,17 @@ import { CR } from './src/chart-retune.js';
         } catch (_) { /* storage blocked */ }
         return undefined;
     }
-    function _write(key, val) {
+    // Persists without triggering _refresh()'s chart-transform 'refresh'
+    // dispatch — for writes that can't possibly change remap output (e.g.
+    // per-string display color), so a value that's purely cosmetic doesn't
+    // walk a host-side highway into a full re-clone + re-remap of the chart.
+    function _writeSilent(key, val) {
         const s = String(val);
         _mem[key] = s;
         try { localStorage.setItem(STORAGE_PREFIX + key, s); } catch (_) { /* storage blocked */ }
+    }
+    function _write(key, val) {
+        _writeSilent(key, val);
         _refresh();
     }
 
@@ -84,14 +91,29 @@ import { CR } from './src/chart-retune.js';
         active.colors = CR.resolveColorsArray(active.colors, active.strings.length, gray);
         return active;
     }
+    // true when normalized's remap-relevant fields (everything but display
+    // color) match what's already stored — a pure color edit shouldn't pay
+    // for a chart-transform refresh, since _transform() never reads color.
+    function _onlyColorsChanged(normalized) {
+        const prev = _readActiveTuning();
+        if (!prev) return false;
+        return prev.maxFret === normalized.maxFret
+            && prev.capo === normalized.capo
+            && prev.capoEnabled === normalized.capoEnabled
+            && prev.octaveOffset === normalized.octaveOffset
+            && prev.strings.length === normalized.strings.length
+            && prev.strings.every((s, i) => s === normalized.strings[i]);
+    }
     function _writeActiveTuning(d) {
         const normalized = CR.parseActiveTuning(d);
         if (!normalized) return false;
-        _write('activeTuning', JSON.stringify({
+        const writeFn = _onlyColorsChanged(normalized) ? _writeSilent : _write;
+        writeFn('activeTuning', JSON.stringify({
             strings: normalized.strings,
             colors: normalized.colors,
             maxFret: normalized.maxFret,
             capo: normalized.capo,
+            capoEnabled: normalized.capoEnabled,
             octaveOffset: normalized.octaveOffset,
         }));
         return true;
@@ -201,7 +223,13 @@ import { CR } from './src/chart-retune.js';
     function _transform(input) {
         const songInfo = input.songInfo || {};
         const arrClass = CR.arrangementClassFor(songInfo.arrangement);
-        _crMountAdjustControls();
+        // _transform() can run many times per second while the mastery
+        // slider is dragged; _crMountAdjustControls does DOM lookups plus a
+        // full repaint, so only pay for that when the widget genuinely isn't
+        // mounted. 'song:ready' (once per song) and the registration path
+        // already cover the "new song / new arrangement, refresh the
+        // displayed profile" case via their own unconditional call.
+        if (!_crRoot || !_crRoot.isConnected) _crMountAdjustControls();
 
         const active = _resolveActiveTuning(arrClass);
         const target = CR.resolveTargetTuning(active.strings);
@@ -442,6 +470,14 @@ import { CR } from './src/chart-retune.js';
             source: PROVIDER_ID,
             payload: { providerId: PROVIDER_ID, label: 'Chart Retuner', transform: _transform },
         })).then(() => {
+            // An already-active provider gets a guaranteed mount via
+            // _setActive -> _install -> _restageChartTransform -> _transform()
+            // above. An inactive/disabled one has no such trigger — its only
+            // other chance is the 'song:ready' listener, which is a no-op if
+            // 'song:ready' already fired before this script finished
+            // registering (e.g. a reload mid-song). Mount here too so the
+            // in-song Retuner toggle is reachable even while off.
+            _crMountAdjustControls();
             // Auto-activate only the first time this plugin ever registers — an
             // absent key means either "never chosen" or "explicitly cleared", and
             // this flag is what tells the two apart on later loads.
