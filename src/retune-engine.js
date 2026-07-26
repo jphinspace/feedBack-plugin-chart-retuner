@@ -196,6 +196,11 @@ export const ANCHOR_DONOR_WINDOW_S = 2;
 // No tier-0 donor nearby -> the revoiced adjustment is still the best
 // available signal, same as before.
 //
+// `_natF` (set by reduceHandTravel, only on notes it relocates): the
+// pre-relocation fret, so an ergonomic hand-travel move never leaks into
+// a donor's fret shift. Falls back to the live fret otherwise — accurate,
+// since an untouched note was never moved.
+//
 // Widening: a note open in the source needs no hand position there, so the
 // source chart's anchors were never authored to cover it — but retuning can
 // land that same note on a nonzero target fret, which now does need one.
@@ -222,7 +227,8 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET)
                 if (tierOf(donors[k]) === 0) { note = donors[k]; break; }
             }
         }
-        const adjustment = note.f - note._origNote.f;
+        const natF = note._natF !== undefined ? note._natF : note.f;
+        const adjustment = natF - note._origNote.f;
         let fret = Math.max(0, Math.min(maxFret, a.fret + adjustment));
         let width = a.width;
 
@@ -266,6 +272,23 @@ export const HAND_JUMP_MIN_IMPROVEMENT = 2;
 // each time-near neighbor regardless of string, so a "fix" can never trade
 // a cross-string stretch for an equally bad same-string leap.
 //
+// Retune-attributable, not just "big": a jump only triggers when retuning
+// made it WORSE than the source already demanded (via `_origNote.f`/`.s`)
+// — a differential per-string retune can still widen an already-
+// borderline source gap past the threshold. Always eligible regardless:
+// a side newly fretted (was open, isn't now — the motivating real case)
+// or notes sharing one SOURCE string (a slide, not a cross-string reach).
+// No `_origNote` -> original unconditional behavior.
+//
+// This is a single left-to-right pass that mutates as it goes, so a
+// neighbor already visited this call may already be relocated — compared
+// against its NATURAL (pre-relocation) `s`/`f`, never its live one, or an
+// earlier note's own unrelated ergonomic move reads as a brand-new
+// problem for this one, purely from processing order (the two notes'
+// true, natural relationship may have been comfortable all along).
+// Scoring candidate alternates still uses live positions, correctly: that
+// step is about the actual final arrangement, not the natural one.
+//
 // Evaluated per note against its own natural placement, not decided once
 // per pitch: the same pitch played elsewhere in the song via a
 // comfortable approach is left untouched, only the actual hard jumps
@@ -275,15 +298,25 @@ export const HAND_JUMP_MIN_IMPROVEMENT = 2;
 export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEligible = () => true) {
     if (!Array.isArray(notes) || notes.length < 2 || !Array.isArray(target)) return;
     const near = (t1, t2) => Math.abs(t2 - t1) <= HAND_JUMP_TIME_WINDOW_S;
+    const natS = (note) => note._natS !== undefined ? note._natS : note.s;
+    const natF = (note) => note._natF !== undefined ? note._natF : note.f;
+    const becameFretted = (note) => note._origNote && note._origNote.f === 0 && note.f > 0;
+    const notWorsenedBySource = (a, b, postGap) => {
+        const oa = a._origNote, ob = b._origNote;
+        if (!oa || !ob || oa.s === ob.s || becameFretted(a) || becameFretted(b)) return false;
+        return postGap <= Math.abs(oa.f - ob.f);
+    };
     for (let i = 0; i < notes.length; i++) {
         const n = notes[i];
         if (n.f <= 0 || !isEligible(n)) continue;
         const prev = i > 0 ? notes[i - 1] : null;
         const next = i + 1 < notes.length ? notes[i + 1] : null;
 
+        const prevGap = (prev && natS(prev) !== n.s && near(prev.t, n.t)) ? Math.abs(n.f - natF(prev)) : -1;
+        const nextGap = (next && natS(next) !== n.s && near(n.t, next.t)) ? Math.abs(n.f - natF(next)) : -1;
         const triggerGap = Math.max(
-            (prev && prev.s !== n.s && near(prev.t, n.t)) ? Math.abs(n.f - prev.f) : -1,
-            (next && next.s !== n.s && near(n.t, next.t)) ? Math.abs(n.f - next.f) : -1,
+            (prevGap >= 0 && !notWorsenedBySource(prev, n, prevGap)) ? prevGap : -1,
+            (nextGap >= 0 && !notWorsenedBySource(n, next, nextGap)) ? nextGap : -1,
         );
         if (triggerGap < HAND_JUMP_FRET_THRESHOLD) continue;
 
@@ -304,6 +337,8 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
             if (best === null || altScore < best.score) best = { s: altS, f: altF, score: altScore };
         }
         if (best && best.score <= naturalScore - HAND_JUMP_MIN_IMPROVEMENT) {
+            n._natS = n.s;
+            n._natF = n.f;
             n.s = best.s;
             n.f = best.f;
         }

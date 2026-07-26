@@ -407,6 +407,117 @@ const SPOT_FRETS = [0, 10, 20];
         [5, 0.75, 2]);
 }
 
+// reduceHandTravel's retune-attributable gate: notes carrying an
+// `_origNote` back-reference (as createRetuner tags them) only trigger a
+// relocation when retuning actually made the jump worse than the source
+// chart already demanded.
+{
+    const { reduceHandTravel } = CR;
+
+    // Same gap before and after (e.g. a full identity remap) -- already a
+    // fact about the arrangement, not this pass's problem. This is the
+    // exact shape of feedBack-plugin-chart-retuner's own reported bug: an
+    // EADG chart's cross-string jump surviving unchanged onto BEADG must
+    // stay unchanged, not get "corrected."
+    const unchanged = [
+        { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 8, _origNote: { s: 1, f: 8 } },
+    ];
+    reduceHandTravel(unchanged, [0, 5, 10, 15], 20);
+    check('reduceHandTravel: a gap already this size in the source is left alone',
+        unchanged.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 1, f: 8 }]);
+
+    // Source gap was already borderline (5, right at threshold) but a
+    // differential per-string retune widens it to 15 -- a genuine new
+    // problem, not one the source already had, so it must still fire even
+    // though the source gap alone crossed the threshold.
+    const worsened = [
+        { t: 0, s: 0, f: 3, _origNote: { s: 0, f: 3 } },
+        { t: 0.2, s: 1, f: 18, _origNote: { s: 1, f: 8 } },
+    ];
+    reduceHandTravel(worsened, [0, 5, 10, 15, 20], 24);
+    check('reduceHandTravel: a source gap retuning made WORSE still fires',
+        worsened.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 3 }, { s: 2, f: 13 }]);
+
+    // A big ORIGIN gap doesn't count as "already existed" when both notes
+    // came from the same SOURCE string (a slide/run, not a cross-string
+    // reach) -- only the post-remap cross-string gap matters here.
+    const sameSourceString = [
+        { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 8, _origNote: { s: 0, f: 14 } },
+    ];
+    reduceHandTravel(sameSourceString, [0, 5, 10, 15], 20);
+    check('reduceHandTravel: a same-SOURCE-string origin gap does not count as already-existing',
+        sameSourceString.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 2, f: 3 }]);
+
+    // A side that was open in the source and is STILL open post-remap
+    // contributes nothing new -- it still counts toward "already existed"
+    // (unlike a side that became fretted, exercised by the "trill" test
+    // above via its lack of `_origNote`).
+    const stillOpen = [
+        { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 0, _origNote: { s: 1, f: 0 } },
+    ];
+    reduceHandTravel(stillOpen, [0, 5, 10, 15], 20);
+    check('reduceHandTravel: a side open both before and after still counts as already-existing',
+        stillOpen.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 1, f: 0 }]);
+
+    // Cascade guard: A has a genuine retuning-caused jump vs a seed note
+    // and legitimately relocates (natural s1/f10 -> s2/f5). B's TRUE
+    // relationship to A is comfortable both before (source frets 3 vs 4,
+    // gap 1) and after (natural frets 10 vs 11, gap 1) retuning -- B must
+    // stay put, not get dragged along purely because A was processed
+    // (and moved) first, one array slot earlier.
+    const seedA_B = [
+        { t: 0.0, s: 0, f: 2,  _origNote: { s: 0, f: 2 } },
+        { t: 0.2, s: 1, f: 10, _origNote: { s: 1, f: 3 } },
+        { t: 0.4, s: 3, f: 11, _origNote: { s: 3, f: 4 } },
+    ];
+    reduceHandTravel(seedA_B, [0, 5, 10, 15, 20, 25], 24);
+    check('reduceHandTravel: an unrelated neighbor relocation does not cascade to a comfortable note',
+        seedA_B.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 2, f: 5 }, { s: 3, f: 11 }]);
+}
+
+// createRetuner() end-to-end: the retune-attributable gate must hold
+// through the full pipeline, not just at the pure-function level.
+{
+    const { createRetuner, DEFAULT_TARGET_MIDI_TUNING } = CR;
+
+    // The actual reported bug: an EADG bass chart on the default BEADG
+    // target is a full identity remap (every note lands on its own exact
+    // natural string/fret). A pre-existing cross-string jump already in
+    // the source chart must survive completely untouched end to end --
+    // including the anchor, which must not be corrupted by borrowing a
+    // hand-travel-relocated donor's delta.
+    {
+        const bundle = {
+            notes: [{ t: 0.0, s: 1, f: 6 }, { t: 0.3, s: 0, f: 0 }],
+            chords: [], anchors: [{ time: 0.0, fret: 6, width: 3 }], chordTemplates: [],
+            tuning: [0, 0, 0, 0], capo: 0, stringCount: 4,
+        };
+        createRetuner().apply(bundle, DEFAULT_TARGET_MIDI_TUNING, 20, 0);
+        check('createRetuner: EADG-on-BEADG identity leaves a pre-existing cross-string jump untouched',
+            bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 2, f: 6 }, { s: 1, f: 0 }]);
+        check('createRetuner: ...and the anchor stays exactly as authored',
+            bundle.anchors, [{ time: 0.0, fret: 6, width: 3 }]);
+    }
+
+    // A genuine differential per-string retune (only one string shifted
+    // hard) must still relocate the note it makes newly awkward, even
+    // through the full pipeline (not just the pure reduceHandTravel call).
+    {
+        const target = [0, 5, 10, 15, 20];
+        const bundle = {
+            notes: [{ t: 0.0, s: 1, f: 3 }, { t: 0.2, s: 2, f: 8 }],
+            chords: [], anchors: [], chordTemplates: [],
+            tuning: [-23, -23, -13, -23], capo: 0, stringCount: 4,
+        };
+        createRetuner().apply(bundle, target, 24, 0);
+        check('createRetuner: a differential retune still relocates the note it makes newly awkward',
+            bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 1, f: 8 }, { s: 4, f: 13 }]);
+    }
+}
+
 // Collision resolution for simultaneous notes NOT wrapped in a Chord
 // object — grouped by onset time and run through resolveChordCollisions
 // the same as a real chord's .notes array.
