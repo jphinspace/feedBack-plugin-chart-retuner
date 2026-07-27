@@ -589,6 +589,25 @@ const SPOT_FRETS = [0, 10, 20];
     check('reduceHandTravel: relocates an entire repeated-note run together, not just its first hit',
         repeatRun.map(n => ({ s: n.s, f: n.f })),
         [{ s: 0, f: 1 }, { s: 2, f: 3 }, { s: 2, f: 3 }, { s: 2, f: 3 }]);
+
+    // Same-natural-string jump, not just cross-string: B shares its
+    // natural string with the C run right after it (a slide-shaped
+    // source relationship), so the big fret jump between them is a real
+    // trigger even though neither ever lands on a different NATURAL
+    // string. C must be the one that relocates (to land beside B on B's
+    // own string) -- not B reaching forward and grabbing an unrelated
+    // same-fret-number alternate on a string that has nothing to do
+    // with A, which would only trade one bad jump for another.
+    const sameStringJump = [
+        { t: 0,   s: 2, f: 5, _origNote: { s: 2, f: 5 } },              // A: comfortable seed
+        { t: 0.2, s: 1, f: 3, _origNote: { s: 1, f: 0 } },              // B: newly fretted, natural E
+        { t: 0.4, s: 1, f: 8, _origNote: { s: 1, f: 5 } },              // C: natural E too -- same source string as B
+        { t: 0.6, s: 2, f: 5, _origNote: { s: 2, f: 5 } },              // D: comfortable exit
+    ];
+    reduceHandTravel(sameStringJump, [0, 5, 10, 15, 20], 20);
+    check('reduceHandTravel: a same-natural-string jump relocates the later note, not the earlier one',
+        sameStringJump.map(n => ({ s: n.s, f: n.f })),
+        [{ s: 2, f: 5 }, { s: 1, f: 3 }, { s: 2, f: 3 }, { s: 2, f: 5 }]);
 }
 
 // createRetuner() end-to-end: the retune-attributable gate must hold

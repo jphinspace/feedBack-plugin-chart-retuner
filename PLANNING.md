@@ -8,10 +8,66 @@ and the full phase log — lives in [`HISTORY.md`](HISTORY.md).
 
 ## Future enhancements
 
-None blocking; each is a candidate for its own phase. Ordered roughly by
-expected user-visible value.
+None blocking; each is a candidate for its own phase. Item 1 is the current
+top priority; the rest are ordered roughly by expected user-visible value.
 
-### 1. Per-preset chord stretch allowance
+### 1. Playability & legibility of remapped output — current priority
+
+**Status.** Pitch-preserving remap across tunings (per-note, chord-aware
+revoicing, hand-position anchors) is confirmed working end-to-end — verified
+against real charts through several rounds of bug fixes. Whether a remapped
+note sounds the right pitch, whether the chord solver finds a legitimate
+voicing, whether an anchor's math agrees with what the notes actually do —
+that's no longer the open question.
+
+**What's next.** With correctness established, the priority shifts to
+*playability* (how hard a remapped note is to play relative to the original,
+given its surrounding notes) and *legibility* (does the highway/anchor
+display read clearly, especially for the repeated patterns most songs are
+built from). Known gaps to pick up from — not solved yet, just called out:
+
+Playability:
+- `reduceHandTravel` only ever compares a note against its immediate
+  prev/next neighbor and only ever considers the two naturally-adjacent
+  strings (`n.s ± 1`) as alternates. It has no view of a note's role in a
+  longer phrase, and can't relocate a note two strings over even when
+  that's the only comfortable option.
+- The scoring metric is raw fret-distance only, blind to string distance —
+  a same-fret-number alternate on a string away from where the hand
+  actually is can score as "comfortable" when it requires a bigger
+  movement than staying put. Worked around for one shape this session
+  (prevGap/nextGap asymmetry); likely not the only shape it affects.
+- Chord-grouped notes are entirely exempt from hand-travel reduction
+  ("already have a deliberate voicing"), so a chord's voicing and the
+  standalone notes immediately around it are never reconciled against
+  each other.
+- `HAND_JUMP_FRET_THRESHOLD`/`HAND_JUMP_MIN_IMPROVEMENT` are flat
+  constants, not scaled per instrument — a 5-fret stretch means something
+  very different on a short-scale ukulele than a full-scale bass.
+- Notes carrying `.sl`/`.slu` (slides) aren't excluded from hand-travel
+  relocation eligibility. Relocating a slide's start note to a different
+  string independent of its endpoint would be wrong; nothing currently
+  guards against it.
+
+Legibility:
+- Anchor width floors at the source chart's own authored width (the
+  right default, per this session's "hand-position indicator, not a
+  note tracker" finding) — but nothing checks whether that authored
+  width is still a sane assumption once a differential per-string retune
+  has actually changed which frets are in play.
+- `ANCHOR_MAX_SPLITS`/`ANCHOR_DONOR_WINDOW_S` are flat constants too, not
+  scaled per instrument or informed by phrase/section structure — the
+  "rapid alternation" fallback has no concept of a musical phrase
+  boundary, so it can unify a hand position across what a player would
+  read as two distinct passages.
+- Repeated-note consistency (same source string+fret -> same target
+  fret) is only guaranteed for a literally consecutive run with nothing
+  else in between (fixed this session). The same riff reused later in
+  the song — a chorus repeating a verse's line, for instance — is
+  remapped independently each time and isn't guaranteed to land on the
+  same frets, since each occurrence's surrounding context can differ.
+
+### 2. Per-preset chord stretch allowance
 
 **Problem.** `MAX_CHORD_SPAN = 3` (`src/chord-solver.js:48`, max−min fretted
 frets, i.e. a 4-fret box) encodes a guitar-scale hand. Short-scale /
@@ -55,28 +111,30 @@ default because it guesses wrong for e.g. a high-tuned guitar; an explicit
 per-preset value with a sane fallback is more predictable. Could be revisited
 as the *default* the editor pre-fills.
 
-### 2. Degraded-chord label marker
+### 3. Degraded-chord label marker
 
-**Problem.** When the degradation ladder simplifies a chord (rung > 0), the
-diagram still shows the chart's original name — "Am7" over a power chord.
+**Problem.** When the degradation ladder simplifies a chord
+(`degradeLevel > 0`), the diagram still shows the chart's original name —
+"Am7" over a power chord.
 
-**Design.** `solveChord` already returns `{ placements, tier, rung }`.
-Where `createRetuner` rebuilds a `chordTemplates` entry from a solved
-voicing, append a marker to the rebuilt template's display name when
-`rung > 0` (e.g. `"Am7 ▾"` or `"Am7 (simplified)"` — pick after seeing it
-rendered; the name field flows straight into a consuming renderer's chord
-diagram). Decisions to make at build time:
-- Marker only for degradation (rung > 0), or also for revoicing (tier ≥ 2,
-  same pitches re-fingered)? Recommendation: degradation only — revoiced
-  chords still sound the full chord, so flagging them reads as noise.
+**Design.** `solveChord` already returns `{ placements, revoiced,
+degradeLevel }`. Where `createRetuner` rebuilds a `chordTemplates` entry
+from a solved voicing, append a marker to the rebuilt template's display
+name when `degradeLevel > 0` (e.g. `"Am7 ▾"` or `"Am7 (simplified)"` — pick
+after seeing it rendered; the name field flows straight into a consuming
+renderer's chord diagram). Decisions to make at build time:
+- Marker only for degradation (`degradeLevel > 0`), or also for revoicing
+  (`revoiced: true`, same pitches re-fingered)? Recommendation: degradation
+  only — revoiced chords still sound the full chord, so flagging them reads
+  as noise.
 - Optional settings toggle if the marker annoys anyone; default on.
 
-**Verify.** Solver test: a degraded rung yields a rebuilt template whose
-name carries the marker and whose Tier-0 twin doesn't. Manual: play a chart
-known to degrade (Eb-standard chart on a narrow-ceiling target) and confirm
-the marker shows in a chord-diagram-capable renderer.
+**Verify.** Solver test: a degraded chord yields a rebuilt template whose
+name carries the marker and whose non-degraded twin doesn't. Manual: play a
+chart known to degrade (Eb-standard chart on a narrow-ceiling target) and
+confirm the marker shows in a chord-diagram-capable renderer.
 
-### 3. Per-string fret floor (banjo drone, short strings)
+### 4. Per-string fret floor (banjo drone, short strings)
 
 **Problem.** A 5-string banjo's drone string physically starts at the 5th
 fret and is never barred; the solver and per-note walk have no per-string
@@ -108,7 +166,7 @@ rendering impossible positions.
 **Priority note:** wait for evidence banjo targets see real use — the field
 touches every remap layer.
 
-### 4. Judgment translation for revoiced chords — mostly resolved by the chart-transform migration
+### 5. Judgment translation for revoiced chords — mostly resolved by the chart-transform migration
 
 **Original problem.** Scoring (note_detect) used to key judgments off the
 chart's ORIGINAL positions — correct for a Tier-0 exact remap, but a

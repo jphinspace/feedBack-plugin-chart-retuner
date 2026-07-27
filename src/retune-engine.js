@@ -358,7 +358,18 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
             const prev = i > 0 ? notes[i - 1] : null;
             const next = end < notes.length ? notes[end] : null;
 
-            const prevGap = (prev && natS(prev) !== n.s && near(prev.t, runStart.t)) ? Math.abs(n.f - natF(prev)) : -1;
+            // prevGap drops the same-natural-string exclusion: a
+            // same-source-string pair (a slide) is documented above as
+            // "always eligible", and notWorsenedBySource is what
+            // actually decides whether a same-string jump counts. This
+            // only applies looking BACKWARD, at the already-settled
+            // predecessor — nextGap keeps the exclusion, since letting a
+            // note trigger on a same-string jump to a not-yet-processed
+            // successor means scoring against that successor's stale
+            // pre-relocation position, which can steal a fix that
+            // rightfully belongs to the successor itself (it may have a
+            // strictly better alternate once IT is evaluated in turn).
+            const prevGap = (prev && near(prev.t, runStart.t)) ? Math.abs(n.f - natF(prev)) : -1;
             const nextGap = (next && natS(next) !== n.s && near(runEnd.t, next.t)) ? Math.abs(n.f - natF(next)) : -1;
             const triggerGap = Math.max(
                 (prevGap >= 0 && !notWorsenedBySource(prev, n, prevGap)) ? prevGap : -1,
