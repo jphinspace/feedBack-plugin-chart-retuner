@@ -1,7 +1,7 @@
 # Chart Retuner
 
 A [feedBack](https://github.com/got-feedBack/feedBack) plugin that lets a
-bass or guitar player play **any** chart, in any source tuning (Drop D,
+bass or guitar player play **any** chart, in any source tuning (Open G,
 Drop C#, whatever), by remapping each note to the correct string/fret for
 a target tuning of your choice instead of the chart's original tuning.
 Notes outside a target instrument's range are dropped.
