@@ -1,43 +1,25 @@
-// Chart Retuner — chord-aware remapping (the guitar-chords feature).
-// One of the pure-logic modules chart-retune.js aggregates into `CR`.
+// Chart Retuner — chord-aware remapping (the guitar-chords feature). One
+// of the pure-logic modules chart-retune.js aggregates into `CR`; never
+// imports retune-engine.js, keeping that dependency one-way (it supplies
+// this module's exact-candidate input, not the reverse).
 //
-// Guitar chords don't map note-for-note across tunings: a per-note
-// pitch-preserving remap of an open chord under a shifted tuning drops
-// notes (fret -1) or blows the shape apart. This module solves a
-// comparable voicing on the TARGET tuning instead. Priorities, in order
-// (user-set, see HISTORY.md Phase 13):
-//   1. Playable — fretted stretch never exceeds a 4-fret box
-//      (max fretted fret − min fretted fret ≤ MAX_CHORD_SPAN) unless the
-//      ORIGINAL chord itself stretched further, and never needs more
-//      than 4 fretting fingers (barres counted as one finger).
-//   2. Hand shape comparable to the original — open-ish chords stay
-//      open-ish/low, a barre isn't introduced where the source had none,
-//      the hand stays near the source fret position. Simplifying the
-//      chord is acceptable.
-//   3. Root note in the bass — least important; inversions/triads are
-//      acceptable when they fit the shape/playability better.
-// Chord IDENTITY is the pitch-class set + root: exact sounded pitches
-// are strongly preferred when playable (EXACT_PITCH_MISS), but octave
-// doublings may change when they aren't ("revoice near position").
+// A per-note pitch-preserving remap can drop notes or break an open
+// chord's shape under a shifted tuning, so this module solves a
+// comparable voicing on the TARGET tuning instead. Priority order: 1)
+// playable (<=MAX_CHORD_SPAN fret box, <=4 fingers, unless the source
+// itself was wider), 2) hand shape close to the source (openness, barre,
+// position), 3) root in the bass. Identity = pitch-class set + root —
+// exact sounded pitches are strongly preferred, octave doublings may
+// change when they aren't playable.
 //
-// Tier ladder (dispatched by solveChord; createRetuner in
-// retune-engine.js supplies the Tier-0 candidate — this module never
-// imports retune-engine, keeping the dependency graph one-way):
-//   Tier 0 — the existing exact per-note remap, accepted when it covers
-//            every source note collision-free AND is playable (or is
-//            literally the source voicing, which is playable by
-//            definition — it was in the chart).
-//   Tier 2 — pitch-class revoicing search over hand positions
-//            (solveVoicingSearch). A strong exact-pitch preference means
-//            every playable exact voicing is found here too, so there is
-//            no separate exact-multiset tier ("Tier 1") — it would be
-//            dead code by construction.
-//   Tier 3 — degradation ladder: the same search re-run with shrinking
-//            required pitch-class sets (full → triad → root+5th dyad →
-//            bare root), each rung costed +DEGRADE_RUNG so a fuller
-//            solution always wins unless it is far worse.
-//   (drop) — solveChord returns null; the caller omits the chord, the
-//            same contract as an unplayable single note.
+// Dispatch (solveChord): the exact per-note remap wins outright when
+// it's collision-free and playable. Otherwise a pitch-class revoicing
+// search (solveVoicingSearch) runs down a degradation ladder — full
+// pitch-class set first, then triad, root+5th, bare root — each rung
+// costed so a fuller solution always wins unless far worse. Every result
+// carries `revoiced` (false only for the exact remap) and `rung` (which
+// ladder step won). No candidate solves -> null (same drop contract as
+// an unplayable single note).
 
 import { notePitchClass } from './pitch.js';
 import { DEFAULT_MAX_FRET } from './target-tuning.js';
@@ -118,17 +100,12 @@ function _contiguousRuns(frettedSortedByString) {
     return runs;
 }
 
-// Fingers needed to fret `voicing` ([{ s, f }], one note per string).
-// Two grouping devices, matching how players actually cover shapes:
-//   - the full barre: every note at the chord's MIN fretted fret counts
-//     as one finger when a barre is valid there (barreIsValid) — F major
-//     1-3-3-2-1-1's three 1s;
-//   - contiguous-string same-fret runs count as one finger each
-//     (mini-barre) — the 3-3-3 a ring finger lays across in Drop-D's
-//     3-3-3-2-1-1 F shape.
-// Open strings are free. Deliberately permissive: this gates
-// playability; computeChordFingers below draws diagrams and prefers
-// canonical one-finger-per-note assignments.
+// Fingers needed to fret `voicing` ([{ s, f }], one note per string): a
+// full barre at the chord's min fret counts as one finger (when valid —
+// barreIsValid), and each contiguous same-fret run elsewhere counts as
+// one (mini-barre). Open strings are free. Deliberately permissive —
+// this gates playability; computeChordFingers below draws diagrams and
+// prefers one-finger-per-note assignments.
 export function fingersNeeded(voicing) {
     const fretted = voicing.filter(n => n.f > 0).sort((a, b) => a.s - b.s);
     if (fretted.length === 0) return 0;
@@ -292,21 +269,18 @@ export function scoreVoicing(spec, voicing) {
 }
 
 // Searches every hand position for the min-cost playable voicing whose
-// notes all belong to `requiredPcs` and which covers EVERY pc in
-// `requiredPcs` at least once. Depth-first over target strings
-// (mute | open-if-in-set | each window fret in-set) with
-// branch-and-bound on the accumulated EXACT_PITCH_MISS partial cost.
-// Positions are visited nearest-to-the-source-position first so the
-// bound tightens early. Voicing size is hard-capped at the SOURCE note
-// count (opts.maxNotes) — the solver never emits more notes than the
-// chart had, which keeps _origNote/scoring semantics sane downstream.
-// Returns { voicing: [{ s, f, midi, pc }], cost } or null.
+// notes all belong to `requiredPcs`, covering every pc in it at least
+// once. DFS over target strings (mute | open-if-in-set | in-set window
+// frets) with branch-and-bound on the partial EXACT_PITCH_MISS cost;
+// positions visited nearest-to-source first so the bound tightens early.
+// Voicing size is capped at the source note count (opts.maxNotes) so
+// _origNote/scoring semantics downstream stay sane. Returns
+// { voicing: [{ s, f, midi, pc }], cost } or null.
 //
-// opts.budget (optional): a shared { nodes, aborted } object — each DFS
-// node decrements `nodes`; at 0 the search stops (keeping best-so-far)
-// and sets `aborted`. Pass the same object to successive searches (the
-// ladder rungs in solveChord) to bound a whole chord's work. Omitted ->
-// a fresh MAX_SEARCH_NODES budget per call.
+// opts.budget (optional): a shared { nodes, aborted } counter, decremented
+// per DFS node — pass the SAME object across the solveChord ladder rungs
+// to bound one chord's work as a whole. Omitted -> a fresh
+// MAX_SEARCH_NODES budget per call.
 export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, maxFret = DEFAULT_MAX_FRET) {
     const target = targetMidiTuning;
     if (!Array.isArray(target) || target.length === 0) return null;
@@ -420,22 +394,20 @@ export function matchVoicingToSource(voicing, spec) {
     return placements;
 }
 
-// Tier dispatch for one chord. `exactCandidate` is the caller-computed
-// Tier-0 result ([{ srcIndex, s, f }] from the existing per-note engine,
-// or null) — accepted when it covers every spec note and is playable,
-// or when it IS the source voicing verbatim (playable by definition).
-// Otherwise the revoicing search runs down the degradation ladder,
-// comparing rungs on cost + rung * DEGRADE_RUNG (with an early break
-// once no later rung can win). Returns
-// { placements: [{ srcIndex, s, f }], tier: 0|2|3, rung } or null (drop
-// the chord). `maxFret` is the active tuning profile's own ceiling
-// (defaults to DEFAULT_MAX_FRET, the historical hardcoded 20).
+// Dispatch for one chord. `exactCandidate` is the caller-computed exact
+// per-note result ([{ srcIndex, s, f }] or null) — accepted when it
+// covers every spec note and is playable, or is the source voicing
+// verbatim. Otherwise runs the degradation ladder, comparing rungs on
+// cost + rung*DEGRADE_RUNG (early break once no later rung can win).
+// Returns { placements, revoiced, rung } or null (drop the chord).
+// `revoiced` is false only for the exact-candidate path; `rung` (0 =
+// full pitch-class set, higher = more degraded) is 0 there too, since it
+// doesn't apply. `maxFret` is the active tuning profile's own ceiling.
 //
-// opts.budget (optional): one { nodes, aborted } object shared by every
-// ladder rung's search, so a pathological chord is bounded as a WHOLE
-// (see MAX_SEARCH_NODES). The caller reads `aborted` afterwards to tell
-// "gave up" (fall back to the per-note path) from a genuine "nothing
-// soundable" null.
+// opts.budget (optional): one { nodes, aborted } object shared across
+// every ladder rung, bounding a pathological chord as a WHOLE (see
+// MAX_SEARCH_NODES) — `aborted` tells "gave up" (fall back to per-note)
+// from a genuine "nothing soundable" null.
 export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEFAULT_MAX_FRET, opts) {
     if (!spec || spec.notes.length === 0) return null;
     if (Array.isArray(exactCandidate) && exactCandidate.length === spec.notes.length) {
@@ -446,7 +418,7 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
         });
         const voicing = exactCandidate.map(pl => ({ s: pl.s, f: pl.f }));
         if (identity || voicingPlayable(voicing, spec)) {
-            return { placements: exactCandidate, tier: 0, rung: 0 };
+            return { placements: exactCandidate, revoiced: false, rung: 0 };
         }
     }
     const W = SOLVER_WEIGHTS;
@@ -460,25 +432,23 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
             const total = found.cost + r * W.DEGRADE_RUNG;
             if (!best || total < best.total) {
                 const placements = matchVoicingToSource(found.voicing, spec);
-                if (placements) best = { total, placements, tier: r === 0 ? 2 : 3, rung: r };
+                if (placements) best = { total, placements, revoiced: true, rung: r };
             }
         }
         // No later rung (baseline (r+1) * DEGRADE_RUNG) can beat this.
         if (best && best.total <= (r + 1) * W.DEGRADE_RUNG) break;
     }
-    return best ? { placements: best.placements, tier: best.tier, rung: best.rung } : null;
+    return best ? { placements: best.placements, revoiced: best.revoiced, rung: best.rung } : null;
 }
 
-// Plausible finger numbers for a remapped chord template
-// (frets-by-target-string, -1 = unused, 0 = open, n = fret). Prefers the
-// canonical one-finger-per-note assignment in ascending (fret, string)
-// order (E major 0-2-2-1-0-0 -> 0-2-3-1-0-0); falls back to a barre
-// (same-fret notes at the min fretted fret share finger 1, valid per
-// barreIsValid) and then to contiguous-run mini-barre grouping only when
-// there are more fretted notes than fingers. Deliberately conservative:
-// anything still ambiguous returns all -1 — a wrong finger number in
-// the chord diagram is worse than none (GP imports already render all
-// -1).
+// Plausible finger numbers for a remapped chord template (frets-by-
+// target-string, -1 = unused, 0 = open, n = fret). Prefers canonical
+// one-finger-per-note in ascending (fret, string) order, falls back to a
+// barre (same-fret notes at the min fret share finger 1, per
+// barreIsValid) then contiguous-run mini-barre grouping when there are
+// more fretted notes than fingers. Deliberately conservative: anything
+// still ambiguous returns all -1 (GP imports already render this way) —
+// a wrong finger number is worse than none.
 export function computeChordFingers(fretsByTargetString) {
     const n = fretsByTargetString.length;
     const fingers = new Array(n).fill(-1);

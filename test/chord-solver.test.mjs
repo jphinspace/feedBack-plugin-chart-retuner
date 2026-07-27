@@ -172,7 +172,7 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
     const notes = v([[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]);
     const spec = chordSpecFromNotes(EB_STD, notes, 'Eb');
     const r = solveChord(spec, E_STD, null);
-    check('Eb->E: tier/rung', { tier: r.tier, rung: r.rung }, { tier: 2, rung: 0 });
+    check('Eb->E: revoiced/rung', { revoiced: r.revoiced, rung: r.rung }, { revoiced: true, rung: 0 });
     check('Eb->E: revoiced near open position',
         r.placements.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s),
         v([[1, 1], [2, 1], [3, 0], [4, 4]]));
@@ -186,15 +186,15 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
 {
     const spec = chordSpecFromNotes(DROP_D, v([[0, 0], [1, 0], [2, 0]]), 'D5');
     const r = solveChord(spec, E_STD, null);
-    check('D5->E: tier', r.tier, 2);
+    check('D5->E: revoiced', r.revoiced, true);
     check('D5->E: playable original pitches survive as opens',
         r.placements.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s),
         v([[1, 0], [2, 0]]));
 }
 
-// solveChord — Tier 0: F barre (133211) in E standard onto Drop D. The
-// per-note engine maps it exactly to 333211 (low string +2, rest
-// unchanged) and the mini-barre run grouping recognizes it as playable.
+// solveChord — exact candidate: F barre (133211) in E standard onto
+// Drop D. The per-note engine maps it exactly to 333211 (low string +2,
+// rest unchanged) and the mini-barre run grouping recognizes it as playable.
 {
     const spec = chordSpecFromNotes(E_STD, v([[0, 1], [1, 3], [2, 3], [3, 2], [4, 1], [5, 1]]), 'F');
     const exact = [
@@ -202,18 +202,18 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
         { srcIndex: 3, s: 3, f: 2 }, { srcIndex: 4, s: 4, f: 1 }, { srcIndex: 5, s: 5, f: 1 },
     ];
     const r = solveChord(spec, DROP_D, exact);
-    check('F->DropD: exact per-note remap accepted as Tier 0', { tier: r.tier, placements: r.placements }, { tier: 0, placements: exact });
+    check('F->DropD: exact per-note remap accepted', { revoiced: r.revoiced, placements: r.placements }, { revoiced: false, placements: exact });
 }
 
-// solveChord — Tier 0 identity acceptance: a source voicing that violates
-// the solver's own playability heuristics is still accepted verbatim (it
-// was in the chart, so it's playable by definition).
+// solveChord — exact-candidate identity acceptance: a source voicing that
+// violates the solver's own playability heuristics is still accepted
+// verbatim (it was in the chart, so it's playable by definition).
 {
     const notes = v([[0, 1], [1, 6]]); // 5-fret stretch
     const spec = chordSpecFromNotes(E_STD, notes, null);
     const exact = [{ srcIndex: 0, s: 0, f: 1 }, { srcIndex: 1, s: 1, f: 6 }];
     const r = solveChord(spec, E_STD, exact);
-    check('identity: chart-given stretch accepted as Tier 0', { tier: r.tier, placements: r.placements }, { tier: 0, placements: exact });
+    check('identity: chart-given stretch accepted', { revoiced: r.revoiced, placements: r.placements }, { revoiced: false, placements: exact });
 }
 
 // solveChord — degradation: a 5-note guitar chord onto a 4-string bass
@@ -301,7 +301,8 @@ function guitarBundle({ tuning = [0, 0, 0, 0, 0, 0], capo = 0, notes = [], chord
 const sf = ns => ns.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
 
 // Identity: an E-standard chart on an EADGBE target remaps every open
-// chord byte-identically (Tier 0), template included, fingers carried.
+// chord byte-identically (the exact candidate), template included,
+// fingers carried.
 {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'C', frets: [-1, 3, 2, 0, 1, 0], fingers: [-1, 3, 2, 0, 1, 0] };
@@ -317,9 +318,9 @@ const sf = ns => ns.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
     passed++;
 }
 
-// E-standard open E (022100) onto a Drop-D target: Tier 0 maps the low
-// string +2 and the rest unchanged (222100); the carried finger 0 on a
-// now-fretted string is invalid, so fingers are re-derived.
+// E-standard open E (022100) onto a Drop-D target: the exact candidate
+// maps the low string +2 and the rest unchanged (222100); the carried
+// finger 0 on a now-fretted string is invalid, so fingers are re-derived.
 {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'E', frets: [0, 2, 2, 1, 0, 0], fingers: [0, 2, 3, 1, 0, 0] };
@@ -332,7 +333,8 @@ const sf = ns => ns.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
 }
 
 // Capo chart: a capo-2 open-C shape sounds D major; on an uncapo'd
-// E-standard target Tier 0 lands the same shape two frets up (x54232).
+// E-standard target the exact candidate lands the same shape two frets
+// up (x54232).
 {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'D', frets: [-1, 3, 2, 0, 1, 0], fingers: [-1, 3, 2, 0, 1, 0] };
@@ -396,8 +398,9 @@ const sf = ns => ns.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
 }
 
 // Bass regression through apply(): a clean simultaneous pair on the
-// default BEADG target behaves exactly as the pre-solver engine (Tier 0
-// == the per-note remap), keeping techniques and _origNote wiring.
+// default BEADG target behaves exactly as the pre-solver engine (the
+// exact candidate == the per-note remap), keeping techniques and
+// _origNote wiring.
 {
     const retuner = CR.createRetuner();
     const rawNotes = [{ t: 0, s: 1, f: 2, sus: 0.5 }, { t: 0, s: 2, f: 0 }];

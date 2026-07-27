@@ -224,11 +224,10 @@ import { CR } from './src/chart-retune.js';
         const songInfo = input.songInfo || {};
         const arrClass = CR.arrangementClassFor(songInfo.arrangement);
         // _transform() can run many times per second while the mastery
-        // slider is dragged; _crMountAdjustControls does DOM lookups plus a
-        // full repaint, so only pay for that when the widget genuinely isn't
-        // mounted. 'song:ready' (once per song) and the registration path
-        // already cover the "new song / new arrangement, refresh the
-        // displayed profile" case via their own unconditional call.
+        // slider is dragged; _crMountAdjustControls does DOM lookups + a
+        // full repaint, so only pay for that when the widget isn't already
+        // mounted ('song:ready' and the registration path already cover
+        // the "new song" refresh case).
         if (!_crRoot || !_crRoot.isConnected) _crMountAdjustControls();
 
         const active = _resolveActiveTuning(arrClass);
@@ -472,11 +471,10 @@ import { CR } from './src/chart-retune.js';
         })).then(() => {
             // An already-active provider gets a guaranteed mount via
             // _setActive -> _install -> _restageChartTransform -> _transform()
-            // above. An inactive/disabled one has no such trigger — its only
-            // other chance is the 'song:ready' listener, which is a no-op if
-            // 'song:ready' already fired before this script finished
-            // registering (e.g. a reload mid-song). Mount here too so the
-            // in-song Retuner toggle is reachable even while off.
+            // above. An inactive one has no such trigger, and 'song:ready' is
+            // a no-op if it already fired before this script finished
+            // registering (e.g. reload mid-song) — mount here too so the
+            // in-song Retuner toggle stays reachable.
             _crMountAdjustControls();
             // Auto-activate only the first time this plugin ever registers — an
             // absent key means either "never chosen" or "explicitly cleared", and

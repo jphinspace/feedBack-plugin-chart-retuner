@@ -25,17 +25,14 @@ const _clampFret = (f, maxFret) => Math.max(0, Math.min(maxFret, f));
 // broken GP export stacking a whole bar on one timestamp) skips the
 // solver entirely and takes the bounded per-note path.
 export const MAX_SOLVER_GROUP_SIZE = 12;
-// MAX_TOTAL_SOLVE_MS — deadline for one whole cold remap, checked
-// between work units (one template / note bucket / chord). Past it the
-// REMAINING groups take the per-note path instead of the solver, so the
+// MAX_TOTAL_SOLVE_MS — deadline for one whole cold remap, checked between
+// work units. Past it, REMAINING groups take the per-note path, so the
 // worst-case apply() stall is ~this deadline plus one node-capped group.
-// Only a pathological chart can hit it, and it lands where it doesn't
-// hurt: on song load the first frame hasn't been drawn yet, and on a
-// mid-song tuning switch it's a couple of dropped frames. (An earlier
-// iteration time-sliced the remap across frames with a generator job
-// instead; deliberately simplified away — the solver node budget
-// already bounds any single group, so a plain deadline gives the same
-// guarantee without the job-lifecycle machinery.)
+// Only a pathological chart hits it, and lands where it doesn't hurt
+// (song load's first frame isn't drawn yet; a mid-song switch drops a
+// couple frames). A prior generator-job time-slicing approach was
+// simplified away — the solver's own node budget already bounds any
+// single group, so a plain deadline gives the same guarantee for free.
 export const MAX_TOTAL_SOLVE_MS = 40;
 
 const _now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
@@ -70,18 +67,16 @@ function _pitchOrderFor(target) {
 }
 
 // Resolves one (sourceOpenMidi, fret) against the target: starts from the
-// natural target string and steps toward whichever direction the
-// out-of-range fret demands — in PITCH order, which equals index order
-// for ascending tunings and follows the rank tables above for
-// non-monotonic ones. Returns { s, f, adjustment } or null if unplayable
-// on every reachable string. Complete: finds a placement iff some string
-// has one (underflow at a pitch implies underflow at every higher pitch,
-// and vice versa, so the one-direction sweep covers every candidate).
+// natural target string and steps in whichever direction the out-of-
+// range fret demands, in PITCH order (index order for ascending tunings,
+// rank order otherwise). Returns { s, f, adjustment } or null if
+// unplayable everywhere — complete, since underflow at one pitch implies
+// underflow at every higher one (and vice versa), so a one-direction
+// sweep covers every candidate.
 //
 // Anchors on the natural string first rather than a global smallest-
-// adjustment search across all strings — a global search misfires on a
-// large single-string drop (e.g. Drop C#, -3 half-steps), flipping to a
-// different string too early.
+// adjustment search — a global search misfires on a large single-string
+// drop (e.g. Drop C#), flipping to a different string too early.
 export function resolveTargetForFret(sourceOpenMidi, naturalTargetString, fret, targetMidiTuning, maxFret = DEFAULT_MAX_FRET) {
     if (sourceOpenMidi === null || sourceOpenMidi === undefined) return null;
     const target = targetMidiTuning || DEFAULT_TARGET_MIDI_TUNING;
@@ -179,41 +174,20 @@ export function resolveChordCollisions(sourceOpenMidiByString, naturalTargetBySt
 }
 
 // How far past an anchor's time (in seconds) remapAnchors looks for an
-// exact-remap (tier-0) donor before settling for a revoiced one.
+// exact-remap donor before settling for a revoiced one.
 export const ANCHOR_DONOR_WINDOW_S = 2;
 
 // Remaps hand-position anchors ({ time, fret, width }, no string of their
 // own) by borrowing the adjustment of the nearest already-remapped note
-// at/after the anchor's time. Open-string notes are skipped as donors.
-// Both arrays must be time-sorted.
-//
-// Donor preference: a REVOICED donor (`_crTier` >= 2 — an octave-shifted
-// chord-solver placement) can carry a huge adjustment that lurches the
-// hand-position band to a nonsense fret for the passage, so when the
-// nearest donor is revoiced, the anchor looks ahead up to
-// ANCHOR_DONOR_WINDOW_S for the first tier-0 donor (exact per-note remap
-// — `_crTier` 0, or untagged notes from direct API use) and prefers it.
-// No tier-0 donor nearby -> the revoiced adjustment is still the best
-// available signal, same as before.
-//
-// `_natF` (set by reduceHandTravel, only on notes it relocates): the
-// pre-relocation fret, so an ergonomic hand-travel move never leaks into
-// a donor's fret shift. Falls back to the live fret otherwise — accurate,
-// since an untouched note was never moved.
-//
-// Widening: a note open in the source needs no hand position there, so the
-// source chart's anchors were never authored to cover it — but retuning can
-// land that same note on a nonzero target fret, which now does need one.
-// Each anchor's band is widened (never shrunk) to also cover any such
-// newly-fretted note within its own span (up to the next anchor), keeping
-// its original coverage intact.
+// at/after the anchor's time. Open-string notes are skipped as donors;
+// both arrays must be time-sorted.
 export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET) {
     if (!Array.isArray(anchors) || anchors.length === 0) return anchors || [];
     if (!Array.isArray(remappedNotes) || remappedNotes.length === 0) return anchors.slice();
     const fretted = remappedNotes.filter(n => n._origNote.f > 0);
     const donors = fretted.length ? fretted : remappedNotes;
     const newlyFretted = remappedNotes.filter(n => n._origNote.f === 0 && n.f > 0);
-    const tierOf = n => n._crTier || 0;
+    const revoicedOf = n => n._crRevoiced === true;
     const out = [];
     let ptr = 0;
     let nfPtr = 0;
@@ -221,17 +195,25 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET)
         const a = anchors[i];
         while (ptr < donors.length - 1 && donors[ptr].t < a.time) ptr++;
         let note = donors[ptr];
-        if (tierOf(note) !== 0) {
+        // Prefer an exact per-note donor over a revoiced one within
+        // ANCHOR_DONOR_WINDOW_S — a revoiced donor's adjustment can
+        // lurch the anchor to a nonsense fret.
+        if (revoicedOf(note)) {
             const limit = a.time + ANCHOR_DONOR_WINDOW_S;
             for (let k = ptr + 1; k < donors.length && donors[k].t <= limit; k++) {
-                if (tierOf(donors[k]) === 0) { note = donors[k]; break; }
+                if (!revoicedOf(donors[k])) { note = donors[k]; break; }
             }
         }
+        // The donor's NATURAL fret (pre-hand-travel) — an ergonomic
+        // relocation must never leak into the anchor's shift.
         const natF = note._natF !== undefined ? note._natF : note.f;
         const adjustment = natF - note._origNote.f;
         let fret = Math.max(0, Math.min(maxFret, a.fret + adjustment));
         let width = a.width;
 
+        // Widen (never shrink) the band to also cover a note that was
+        // open in the source but is newly fretted here — the source
+        // chart's anchors were never authored to give it a hand position.
         const spanEnd = i + 1 < anchors.length ? anchors[i + 1].time : Infinity;
         while (nfPtr < newlyFretted.length && newlyFretted[nfPtr].t < a.time) nfPtr++;
         for (let k = nfPtr; k < newlyFretted.length && newlyFretted[k].t < spanEnd; k++) {
@@ -254,52 +236,24 @@ export const HAND_JUMP_TIME_WINDOW_S = 0.75;
 // frets to be worth relocating to — rejects marginal, barely-better swaps.
 export const HAND_JUMP_MIN_IMPROVEMENT = 2;
 
-// Relocates a note to an exact-pitch alternate on an adjacent target
-// string when it's reached via a large, fast cross-string jump from a
-// temporal neighbor — e.g. a source open string that lands on a nonzero
-// target fret can trade places with a far-off fretted neighbor for a much
-// closer one (BEADG's perfect-fourths spacing means fret 8 on one string
-// sounds identical to fret 3 on the next string up). `notes` must be
-// time-sorted; mutates in place. `isEligible(note)` (default: every note)
-// lets a caller restrict this to genuinely standalone notes — a note
-// solved as part of a simultaneous group already has a deliberate voicing
-// this pass has no business overriding.
-//
-// Triggering and scoring measure different things: a note only counts as
-// a hand-travel PROBLEM when it's a CROSS-string jump (a same-string run
-// is a normal slide/shift, not what this pass targets) — but once
-// triggered, candidate placements are compared by raw fret distance to
-// each time-near neighbor regardless of string, so a "fix" can never trade
-// a cross-string stretch for an equally bad same-string leap.
-//
-// Retune-attributable, not just "big": a jump only triggers when retuning
-// made it WORSE than the source already demanded (via `_origNote.f`/`.s`)
-// — a differential per-string retune can still widen an already-
-// borderline source gap past the threshold. Always eligible regardless:
-// a side newly fretted (was open, isn't now — the motivating real case)
-// or notes sharing one SOURCE string (a slide, not a cross-string reach).
-// No `_origNote` -> original unconditional behavior.
-//
-// This is a single left-to-right pass that mutates as it goes, so a
-// neighbor already visited this call may already be relocated — compared
-// against its NATURAL (pre-relocation) `s`/`f`, never its live one, or an
-// earlier note's own unrelated ergonomic move reads as a brand-new
-// problem for this one, purely from processing order (the two notes'
-// true, natural relationship may have been comfortable all along).
-// Scoring candidate alternates still uses live positions, correctly: that
-// step is about the actual final arrangement, not the natural one.
-//
-// Evaluated per note against its own natural placement, not decided once
-// per pitch: the same pitch played elsewhere in the song via a
-// comfortable approach is left untouched, only the actual hard jumps
-// move. An alternate is adopted only if it clearly reduces the worst-case
-// distance AND doesn't collide with another note sounding at the same
-// instant.
+// Relocates a note reached via a fast, large cross-string jump to an
+// exact-pitch alternate on an adjacent string; scores candidates by raw
+// fret distance regardless of string, so a fix can't trade one bad jump
+// for an equally bad same-string one. `notes` must be time-sorted;
+// mutates in place. `isEligible` restricts to standalone notes —
+// group-solved notes already have a deliberate voicing.
 export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEligible = () => true) {
     if (!Array.isArray(notes) || notes.length < 2 || !Array.isArray(target)) return;
     const near = (t1, t2) => Math.abs(t2 - t1) <= HAND_JUMP_TIME_WINDOW_S;
+    // A neighbor's NATURAL (pre-relocation) position — this pass mutates
+    // left-to-right, so an earlier unrelated relocation must not cascade
+    // into a false trigger for this note.
     const natS = (note) => note._natS !== undefined ? note._natS : note.s;
     const natF = (note) => note._natF !== undefined ? note._natF : note.f;
+    // A jump triggers only when retuning made it worse than the source
+    // chart already had (compares `_origNote`). Always eligible: a side
+    // newly fretted (was open, isn't now), or notes sharing one source
+    // string (a slide). No `_origNote` -> fires unconditionally.
     const becameFretted = (note) => note._origNote && note._origNote.f === 0 && note.f > 0;
     const notWorsenedBySource = (a, b, postGap) => {
         const oa = a._origNote, ob = b._origNote;
@@ -320,6 +274,8 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
         );
         if (triggerGap < HAND_JUMP_FRET_THRESHOLD) continue;
 
+        // Live positions here, unlike the trigger check above — scoring
+        // targets the real final arrangement, not the natural one.
         const score = (f) => Math.max(
             (prev && near(prev.t, n.t)) ? Math.abs(f - prev.f) : -1,
             (next && near(n.t, next.t)) ? Math.abs(f - next.f) : -1,
@@ -371,15 +327,15 @@ export function remapChordTemplates(sourceOpenMidiByString, naturalTargetByStrin
     return templates.map(t => remapChordTemplate(sourceOpenMidiByString, naturalTargetByString, t, targetMidiTuning, maxFret));
 }
 
-// PATCH POINT (chord solver) — Tier-0 candidate for a simultaneous-note
-// group: the existing per-note engine's output expressed as solver
-// placements, or null when any note drops or two notes collide on one
-// target string (those cases go to the revoicing search instead —
-// src/chord-solver.js). Notes on null-open-midi strings are skipped, the
-// same filter chordSpecFromNotes applies, so the two views of the group
-// stay index-aligned. Each placement keeps the engine `entry` so a
-// Tier-0-accepted group materializes byte-identically to the per-note
-// path (including remapped slide endpoints).
+// PATCH POINT (chord solver) — exact per-note candidate for a
+// simultaneous-note group: the existing per-note engine's output
+// expressed as solver placements, or null when any note drops or two
+// notes collide on one target string (those cases go to the revoicing
+// search instead — src/chord-solver.js). Notes on null-open-midi strings
+// are skipped, the same filter chordSpecFromNotes applies, so the two
+// views of the group stay index-aligned. Each placement keeps the engine
+// `entry` so an accepted group materializes byte-identically to the
+// per-note path (including remapped slide endpoints).
 function _exactCandidateFor(sourceOpenMidiByString, naturalTargetByString, notes, targetMidiTuning, maxFret) {
     const placements = [];
     const taken = new Set();
@@ -396,19 +352,16 @@ function _exactCandidateFor(sourceOpenMidiByString, naturalTargetByString, notes
 }
 
 // Materializes solver placements into remapped note copies — the same
-// shape the per-note path emits: source-note fields (sustain,
-// techniques, ...) + target s/f + `_origNote` back-reference (the
-// note-state scorer keys judgments by the ORIGINAL time/string/fret).
-// Tier-0 placements carry the engine `entry` (with its own remapped
-// slide endpoints); revoiced placements re-apply the source note's slide
-// delta to the solved fret instead, clamped like remapSlide does.
+// shape the per-note path emits: source-note fields + target s/f +
+// `_origNote` back-reference (the note-state scorer keys judgments by
+// the ORIGINAL time/string/fret). Exact placements carry the engine
+// `entry` (with its own remapped slide endpoints); revoiced placements
+// re-apply the source note's slide delta to the solved fret instead.
 //
-// `tier` (optional): the group's solve tier, tagged onto each copy as
-// `_crTier` for remapAnchors' donor preference. Only bundle.notes
-// entries can donate to anchors, so the chord paths omit it — an
-// untagged note reads as tier 0 there, which is also the right default
-// for direct API users building remappedNotes by hand.
-function _materializePlacements(notes, placements, maxFret, tier) {
+// `revoiced` (optional): tagged onto each copy as `_crRevoiced` for
+// remapAnchors' donor preference. Chord paths omit it — an untagged note
+// reads as not revoiced, also the right default for direct API use.
+function _materializePlacements(notes, placements, maxFret, revoiced) {
     const out = [];
     for (const pl of placements) {
         const src = notes[pl.srcIndex];
@@ -420,7 +373,7 @@ function _materializePlacements(notes, placements, maxFret, tier) {
             else if (Number.isInteger(src.slu) && src.slu >= 0) copy.slu = _clampFret(pl.f + (src.slu - src.f), maxFret);
         }
         copy._origNote = src;
-        if (tier !== undefined) copy._crTier = tier;
+        if (revoiced !== undefined) copy._crRevoiced = revoiced;
         out.push(copy);
     }
     return out;
@@ -438,27 +391,23 @@ function _collisionPlacements(sourceOpenMidiByString, naturalTargetByString, not
     if (survivors.length === 0) return null;
     return {
         placements: survivors.map(({ entry, note }) => ({ srcIndex: notes.indexOf(note), s: entry.s, f: entry.f, entry })),
-        tier: 0,
+        revoiced: false,
         rung: 0,
         degraded: true,
     };
 }
 
 // Solves one simultaneous-note group (a Chord's notes, a chord
-// template's sounded frets, or a same-onset flat-note bucket) against
-// the target: Tier 0 (exact per-note remap) first, then the revoicing /
-// degradation search. Returns { placements, tier, rung } or null (the
-// group is entirely unsoundable — dropped, matching the single-note
-// contract). `cache` lives for one remap run (one song/tuning/capo
-// combination — see createRetuner's cache keys), keyed by the group's
-// ordered (s,f,sl,slu) shape + template name so every recurrence of the
-// same chord resolves to the same voicing at zero cost.
+// template's sounded frets, or a same-onset flat-note bucket): the exact
+// per-note remap first, then the revoicing/degradation search. Returns
+// { placements, revoiced, rung } or null (unsoundable, matching the
+// single-note drop contract). `cache` lives for one remap run, keyed by
+// the group's ordered (s,f,sl,slu) shape + template name.
 //
-// `jobCtl` ({ solverDisabled, maxSearchNodes, stats }) is createRetuner's
-// safety-valve state: oversized groups and solver-disabled jobs route to
-// _collisionPlacements, and a node-budget abort that found nothing falls
-// back there too — "solver gave up" must degrade the voicing, never drop
-// a group the per-note path could still place.
+// `jobCtl` ({ solverDisabled, maxSearchNodes, stats }): oversized groups
+// and solver-disabled jobs route to _collisionPlacements; a node-budget
+// abort that found nothing falls back there too — "gave up" must
+// degrade the voicing, never drop a group the per-note path could place.
 function _solveGroup(cache, sourceOpenMidiByString, naturalTargetByString, notes, targetMidiTuning, templateName, maxFret, jobCtl) {
     let key = (templateName || '') + '#';
     for (const n of notes) key += n.s + ',' + n.f + ',' + (n.sl ?? '') + ',' + (n.slu ?? '') + '|';
@@ -555,11 +504,8 @@ export function createRetuner(opts) {
             const solved = _solveGroup(groupCache, sourceOpenMidiByString, naturalTargetByString, tNotes, target, template.displayName || template.name, maxFret, ctl);
             const frets = new Array(target.length).fill(-1);
             if (!solved) {
-                // Nothing soundable (all strings null-midi) —
-                // an all-unused template, same net effect as
-                // the per-note path dropping every note. A
-                // non-array fingers field passes through
-                // untouched, like remapChordTemplate does.
+                // Nothing soundable (all strings null-midi) — same net
+                // effect as the per-note path dropping every note.
                 return Object.assign({}, template, {
                     frets,
                     fingers: Array.isArray(template.fingers) ? frets.slice() : template.fingers,
@@ -571,26 +517,18 @@ export function createRetuner(opts) {
                 frets[pl.s] = pl.f;
             }
             templateSolutions.set(ti, byString);
-            // Fingers. A chart that omitted finger data
-            // entirely (non-array — distinct from GP imports'
-            // all--1 arrays) keeps that omission, matching the
-            // pre-solver engine: no fabricated digits on the
-            // chord ghost. Otherwise: Tier 0 kept the source
-            // pitches note-for-note, so carry the chart's own
-            // fingering per string (what the pre-solver path
-            // did) — UNLESS the remap moved a note across the
-            // open/fretted boundary (an open source string
-            // landing on a fret, e.g. an open E shape onto a
-            // Drop-D target), where a carried finger 0 is
-            // nonsense. A revoiced shape (tier > 0) always
-            // invalidates chart fingerings. Both of those
-            // derive plausible ones instead.
+            // Fingers: a chart that omitted finger data entirely (non-
+            // array) keeps that omission — no fabricated digits. An exact
+            // placement otherwise carries the chart's own per-string
+            // fingering UNLESS the remap crossed the open/fretted
+            // boundary (a carried finger 0 would be nonsense) or the
+            // shape was revoiced — both derive plausible fingers instead.
             let fingers;
             if (!Array.isArray(template.fingers)) {
                 fingers = template.fingers;
             } else {
                 let carried = null;
-                if (solved.tier === 0) {
+                if (!solved.revoiced) {
                     carried = new Array(target.length).fill(-1);
                     for (const pl of solved.placements) {
                         const c = template.fingers[tNotes[pl.srcIndex].s] ?? -1;
@@ -617,10 +555,10 @@ export function createRetuner(opts) {
         // flat Notes sharing a time rather than a Chord object), so
         // simultaneous notes on different source strings still
         // resolve as one chord. PATCH POINT (chord solver): groups
-        // of >= 2 route through the solver — Tier 0 reproduces the
-        // per-note remap whenever it is drop/collision-free and
-        // playable, so single notes and clean groups behave exactly
-        // as before; only groups the per-note path would break
+        // of >= 2 route through the solver — the exact candidate
+        // reproduces the per-note remap whenever it is drop/collision-
+        // free and playable, so single notes and clean groups behave
+        // exactly as before; only groups the per-note path would break
         // (drops, collisions, unplayable stretches) get revoiced.
         const newNotes = [];
         // Notes with no simultaneous partner at all — reduceHandTravel may
@@ -638,13 +576,13 @@ export function createRetuner(opts) {
                 checkDeadline();
                 if (bucket.length >= 2) {
                     const solved = _solveGroup(groupCache, sourceOpenMidiByString, naturalTargetByString, bucket, target, null, maxFret, ctl);
-                    if (solved) newNotes.push(..._materializePlacements(bucket, solved.placements, maxFret, solved.tier));
+                    if (solved) newNotes.push(..._materializePlacements(bucket, solved.placements, maxFret, solved.revoiced));
                 } else {
                     const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, bucket, target, maxFret);
                     for (const { entry, note } of survivors) {
                         const copy = Object.assign({}, note, entry);
                         copy._origNote = note; // keyed by the note-state provider
-                        copy._crTier = 0; // exact per-note remap — always a preferred anchor donor
+                        copy._crRevoiced = false; // exact per-note remap — always a preferred anchor donor
                         standalone.add(copy);
                         newNotes.push(copy);
                     }
@@ -660,17 +598,14 @@ export function createRetuner(opts) {
                 const chNotes = ch.notes || [];
                 let placements = null;
                 // Template-first: an instance whose notes match its
-                // template's frets — including a difficulty-filtered
-                // SUBSET of them — takes the template's solved
-                // voicing per source string, so instances at every
-                // difficulty level agree with each other and with
-                // the chord diagram. Instances that reference a
-                // string the template solve dropped (or that
-                // diverge from their template) solve ad-hoc below.
-                // A null/absent id means "no template" — guarded
-                // BEFORE Number() coercion, which would turn null
-                // into 0 and alias template index 0 (same guard the
-                // chord-ghost helpers in screen.js apply).
+                // template's frets (even a difficulty-filtered SUBSET)
+                // takes the template's solved voicing, so instances at
+                // every difficulty level agree with each other and the
+                // chord diagram. Instances referencing a dropped/
+                // diverging string solve ad-hoc below. Null/absent id
+                // means "no template" — guarded before Number() coercion,
+                // which would alias null to template index 0 (same guard
+                // screen.js's chord-ghost helpers apply).
                 const cid = ch.id == null ? null
                     : (typeof ch.id === 'number' ? ch.id : Number(ch.id));
                 const byString = cid !== null ? templateSolutions.get(cid) : undefined;
@@ -678,8 +613,8 @@ export function createRetuner(opts) {
                 // Sliding chords skip the template shortcut: the
                 // template solution was solved from PLAIN frets, so
                 // it can't reproduce remapSlide's lower-endpoint
-                // anchoring — the ad-hoc path's Tier 0 goes through
-                // remapNoteEntry/remapSlide and keeps slides exact.
+                // anchoring — the ad-hoc path's exact candidate goes
+                // through remapNoteEntry/remapSlide and keeps slides exact.
                 const hasSlide = chNotes.some(n => (Number.isInteger(n.sl) && n.sl >= 0)
                     || (Number.isInteger(n.slu) && n.slu >= 0));
                 if (!hasSlide && byString && tmpl && chNotes.length > 0
@@ -716,24 +651,18 @@ export function createRetuner(opts) {
         remappedTemplates = newTemplates;
 
         // Physical-fret display shift (target capo). The remap above is
-        // capo-RELATIVE: it matches sounding pitches against the
-        // capo-shifted open pitches, so fret r means "r above the capo".
-        // A renderer that numbers its board physically (capo 6 + relative
-        // fret 1 = you're playing fret 7) passes the target capo as
-        // displayFretOffset and every FRETTED output fret becomes
-        // physical: r + capo. This is pure relabeling, not remapping —
-        // base + physical == (base + capo) + relative, so the sounding
-        // pitch math is untouched.
+        // capo-RELATIVE (fret r means "r above the capo"); a renderer
+        // numbering its board physically passes the target capo as
+        // displayFretOffset and every FRETTED output fret becomes r +
+        // capo — pure relabeling, sounding pitch untouched.
         //
-        // Opens (fret 0) deliberately stay 0: with a capo they are held
-        // by the bar, not fingered, and renderers key open-note treatment
-        // (wide lane bars, camera exclusion) on f === 0. Slide endpoints
-        // shift under the same rule. Anchors are hand POSITIONS, not
-        // opens — they always shift (rebuilt as fresh objects: on the
-        // no-donor path remapAnchors returns the RAW chart anchor objects,
-        // which must never be mutated). Template frets shift where > 0
-        // (-1 unused / 0 open preserved); fingers are untouched (0 =
-        // "no finger" still holds under a capo).
+        // Opens (fret 0) stay 0 — held by the bar, not fingered, and
+        // renderers key open-note treatment on f === 0. Slides shift the
+        // same way. Anchors (hand POSITIONS, not opens) always shift,
+        // rebuilt as fresh objects (the no-donor remapAnchors path
+        // returns the RAW chart objects, never mutated). Template frets
+        // shift where > 0; fingers are untouched (0 = "no finger" still
+        // holds under a capo).
         if (displayFretOffset > 0) {
             const off = displayFretOffset;
             const shiftNote = (n) => {

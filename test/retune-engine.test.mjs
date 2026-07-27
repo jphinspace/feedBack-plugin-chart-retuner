@@ -1552,29 +1552,29 @@ function mkBundle(raw) {
 }
 
 // ---- Anchor-donor refinement after revoicing (PLANNING #2) ------------
-// A revoiced donor (solve tier >= 2) can carry an octave-sized fret
-// adjustment; remapAnchors now prefers the first tier-0 donor within
-// ANCHOR_DONOR_WINDOW_S past the anchor, falling back to the revoiced
-// adjustment only when no exact donor is nearby.
+// A revoiced donor can carry an octave-sized fret adjustment; remapAnchors
+// prefers the first exact donor within ANCHOR_DONOR_WINDOW_S past the
+// anchor, falling back to the revoiced adjustment only when no exact
+// donor is nearby.
 {
     const { remapAnchors, ANCHOR_DONOR_WINDOW_S } = CR;
     assert.ok(ANCHOR_DONOR_WINDOW_S > 0, 'donor window sane'); passed++;
-    const mk = (t, origF, newF, tier) => {
+    const mk = (t, origF, newF, revoiced) => {
         const n = { t, s: 0, f: newF, _origNote: { t, s: 0, f: origF } };
-        if (tier !== undefined) n._crTier = tier;
+        if (revoiced !== undefined) n._crRevoiced = revoiced;
         return n;
     };
-    // Revoiced (+12) donor right at the anchor, tier-0 (-2) donor 1s later.
-    check('anchor donor: nearby tier-0 donor beats the revoiced one',
-        remapAnchors([{ time: 0.9, fret: 5, width: 4 }], [mk(1.0, 5, 17, 2), mk(2.0, 5, 3, 0)]),
+    // Revoiced (+12) donor right at the anchor, exact (-2) donor 1s later.
+    check('anchor donor: nearby exact donor beats the revoiced one',
+        remapAnchors([{ time: 0.9, fret: 5, width: 4 }], [mk(1.0, 5, 17, true), mk(2.0, 5, 3, false)]),
         [{ time: 0.9, fret: 3, width: 4 }]);
-    // Tier-0 donor beyond the window: the revoiced adjustment still wins
+    // Exact donor beyond the window: the revoiced adjustment still wins
     // (it is the only signal for that passage).
-    check('anchor donor: no tier-0 within the window -> revoiced fallback',
+    check('anchor donor: no exact donor within the window -> revoiced fallback',
         remapAnchors([{ time: 0.9, fret: 5, width: 4 }],
-            [mk(1.0, 5, 17, 2), mk(0.9 + ANCHOR_DONOR_WINDOW_S + 1, 5, 3, 0)]),
+            [mk(1.0, 5, 17, true), mk(0.9 + ANCHOR_DONOR_WINDOW_S + 1, 5, 3, false)]),
         [{ time: 0.9, fret: 17, width: 4 }]);
-    // Untagged donors (direct API use) are trusted as tier 0 — the
+    // Untagged donors (direct API use) are trusted as exact — the
     // pre-refinement behavior, byte-identical.
     check('anchor donor: untagged donors behave as before',
         remapAnchors([{ time: 0.9, fret: 5, width: 4 }], [mk(1.0, 5, 17), mk(2.0, 5, 3)]),
@@ -1582,9 +1582,9 @@ function mkBundle(raw) {
 }
 
 // End-to-end through createRetuner: a same-onset bucket whose low D1
-// drops under the exact remap (below EADG's range) gets revoiced
-// (tier 2) — its notes are tagged, and the anchor skips past them to
-// the exact (tier 0) single note that follows.
+// drops under the exact remap (below EADG's range) gets revoiced — its
+// notes are tagged, and the anchor skips past them to the exact single
+// note that follows.
 {
     const { createRetuner } = CR;
     const eadg = DEFAULT_TARGET_MIDI_TUNING.slice(1); // E1 A1 D2 G2
@@ -1594,22 +1594,22 @@ function mkBundle(raw) {
         // solver revoices the pair; (s1,f1... ) see below.
         notes: [
             { t: 0, s: 0, f: 1 }, { t: 0, s: 1, f: 1 },
-            { t: singleT, s: 2, f: 4 }, // (s2,f4)=D2+4 — exact, tier 0, adjustment 0
+            { t: singleT, s: 2, f: 4 }, // (s2,f4)=D2+4 — exact, adjustment 0
         ],
         chords: [], anchors: [{ time: 0, fret: 1, width: 4 }], templates: [],
         tuning: [-3, -3, 0, 0], capo: 0, sc: 4,
     });
 
-    // Tier tags + the preferred-donor path (single note inside the window).
+    // Revoiced tags + the preferred-donor path (single note inside the window).
     const near = createRetuner();
     const nearRaw = mkRaw(0.6);
     const nearBundle = mkBundle(nearRaw);
     near.apply(nearBundle, eadg);
     const bucketNotes = nearBundle.notes.filter(n => n.t === 0);
-    assert.ok(bucketNotes.length >= 1 && bucketNotes.every(n => n._crTier >= 2),
-        'revoiced bucket notes carry their solve tier'); passed++;
-    check('exact single note is tagged tier 0', nearBundle.notes.find(n => n.t === 0.6)._crTier, 0);
-    check('anchor takes the nearby tier-0 donor adjustment (0), not the revoiced one',
+    assert.ok(bucketNotes.length >= 1 && bucketNotes.every(n => n._crRevoiced === true),
+        'revoiced bucket notes are tagged'); passed++;
+    check('exact single note is tagged not revoiced', nearBundle.notes.find(n => n.t === 0.6)._crRevoiced, false);
+    check('anchor takes the nearby exact donor adjustment (0), not the revoiced one',
         nearBundle.anchors, [{ time: 0, fret: 1, width: 4 }]);
 
     // Same chart with the exact note pushed past the window: the anchor
@@ -1620,9 +1620,9 @@ function mkBundle(raw) {
     far.apply(farBundle, eadg);
     const donor = farBundle.notes[0]; // first (time-sorted) fretted note at t=0
     const expected = Math.max(0, Math.min(20, 1 + donor.f - donor._origNote.f));
-    check('anchor falls back to the revoiced donor when no tier-0 is nearby',
+    check('anchor falls back to the revoiced donor when no exact donor is nearby',
         farBundle.anchors, [{ time: 0, fret: expected, width: 4 }]);
-    assert.ok(expected !== 1, 'fallback case actually differs from the tier-0 adjustment'); passed++;
+    assert.ok(expected !== 1, 'fallback case actually differs from the exact adjustment'); passed++;
 }
 
 console.log(`OK - ${passed} assertions passed`);

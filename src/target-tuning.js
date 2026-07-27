@@ -29,18 +29,14 @@ export function isValidMaxFret(v) {
     return MAX_FRET_OPTIONS.indexOf(v) !== -1;
 }
 
-// Capo — a per-tuning-profile fret the player clamps a capo on,
-// ON TOP of the tuning's own string pitches. One capo fret = one
-// half-step up per string, and the frets above (maxFret - capo) fall off
-// the far end of the neck. 0 means "no capo". Negative capos and capos
-// at/beyond the tuning's max fret are invalid (the settings slider runs
-// 0..maxFret-1). Deliberate identity: tuning every string down k
-// half-steps + capo at fret k reproduces the un-capo'd chart exactly
-// (cumulative offset 0) for any chart that fits the shortened neck.
-//
+// Capo — a per-tuning-profile fret the player clamps on TOP of the
+// tuning's own string pitches; 1 capo fret = 1 half-step per string, and
+// frets above (maxFret - capo) fall off the neck. 0 = no capo; negative
+// or >= maxFret is invalid. Deliberate identity: tuning every string down
+// k half-steps + capo at fret k reproduces the un-capo'd chart exactly.
 // Separate from the chart's own SOURCE capo (songInfo.capo, consumed by
-// computeOpenStringMidiByString below); this one describes the TARGET
-// instrument and is gated by capoEnabled below.
+// computeOpenStringMidiByString below) — this one describes the TARGET
+// instrument, gated by capoEnabled below.
 export function isValidCapo(v, maxFret) {
     return Number.isInteger(v) && v >= 0 && v < (Number.isInteger(maxFret) ? maxFret : DEFAULT_MAX_FRET);
 }
@@ -98,51 +94,25 @@ export const DEFAULT_TARGET_TUNING = ['B0', 'E1', 'A1', 'D2', 'G2'];
 export const EXTENDED_DEFAULT_TARGET_TUNING = ['C#0', 'F#0', 'B0', 'E1', 'A1', 'D2', 'G2', 'B2', 'E3'];
 export const EXTENDED_CORE_INDEX = 2;
 
-// Built-in tuning presets — selectable in the Active tuning dropdowns,
-// never user-editable/deletable (no entry in the "Saved custom tunings"
-// list). There can be any number of these; DEFAULT_TUNING_ID /
-// DEFAULT_GUITAR_TUNING_ID (below) name which ones are the per-class
-// defaults rather than that being implied by "built-in" or by array
-// position. EADG (id 'eadg', standard 4-string bass) is the bass default;
-// EADGBE (standard 6-string guitar) is the rhythm/lead default. `colors:
-// null` is the sentinel resolveActiveTuning/settings.html's color-suggestion
-// helpers read to mean "derive from note identity" (CR.colorRoleForNote,
-// falling back to CR.lowBColor() for the low string) rather than a fixed
-// set — EADG and BEADG share it because EADG's strings are literally
-// BEADG's own E/A/D/G strings minus the low B, so the same note-identity
-// mapping (plus lowB when present) applies to both; colors are derived
-// per-string by note identity, not by a hardcoded position table, so this
-// generalizes to either shape. The guitar presets (EADGBE, 7-string
-// BEADGBE, baritone BEADF#B) carry an explicit per-position `roles` array
-// instead, since their guitar-octave notes sit outside the bass-octave
-// note-identity chain — resolveActiveTuning passes it through for a
-// consumer to prefer over note-identity derivation. (The chain itself is
-// deliberately NOT
-// extended with guitar octaves: defaultExtensionNote and the settings
-// editor's color suggestions key off the bass chain, and adding guitar
-// MIDIs there would silently change what a user adding an E2/A2/...
-// string to a custom bass tuning is offered.) Baritone's roles are
-// position-parallel to standard guitar — colors pinned to string
-// POSITION, matching the plugin-wide rule that switching tunings never
-// reshuffles colors — and the 7-string's extra low string takes the
-// dedicated 'lowB' role (core's own "Low B" swatch is the 7-string low-B
-// color). Every other preset carries concrete hand-picked colors and
-// flows through the same resolution path a user-saved custom tuning does;
-// Violin's colors follow the Cello preset's note-parallel picks (shared
-// G/D/A hues) plus a red for its E, since no note-identity role fits a
-// fifths-tuned instrument.
+// Built-in tuning presets for the Active tuning dropdowns — not user-
+// editable/deletable. DEFAULT_TUNING_ID/DEFAULT_GUITAR_TUNING_ID (below)
+// name the per-class defaults.
 //
-// Each preset also carries a `maxFret` (see DEFAULT_MAX_FRET/
-// MAX_FRET_OPTIONS above) — the highest fret its remap range reaches,
-// user-set per instrument rather than the old blanket 20. Bass (EADG)
-// keeps the historical 20; the 5-string bass and every guitar preset get
-// the generous 24 (guitar/bass charts occasionally carry a high
-// transcribed solo passage above fret 20). Violin and mandolin — genuinely
-// short-necked fretless/course instruments in practice — get 14. The
-// remaining orchestral/folk presets (upright bass solo, cello, viola,
-// both banjos) don't have a settled real-world fret-equivalent count, so
-// they default to the same generous 24 rather than a guessed narrower
-// number.
+// `colors: null` means "derive from note identity" (colorRoleForNote,
+// falling back to lowBColor for the low string) — EADG/BEADG share this
+// since EADG's strings ARE BEADG's own E/A/D/G minus the low B. Guitar
+// presets carry an explicit per-position `roles` array instead (their
+// guitar-octave notes sit outside the bass note-identity chain, which is
+// deliberately not extended with guitar octaves — that same chain also
+// drives the settings editor's custom-tuning color suggestions).
+// Baritone's roles are position-parallel to standard guitar; the
+// 7-string's extra low string gets the dedicated 'lowB' role. Every
+// other preset carries concrete hand-picked, note-parallel colors.
+//
+// `maxFret`: bass (EADG) keeps the historical 20; the 5-string bass and
+// every guitar preset get 24 (occasional high transcribed solos); violin
+// and mandolin (genuinely short-necked) get 14; the remaining
+// orchestral/folk presets default to 24 for lack of a settled number.
 export const BUILTIN_PRESET_TUNINGS = [
     {
         id: 'eadg',
@@ -244,16 +214,13 @@ export const BUILTIN_PRESET_TUNINGS = [
     {
         id: 'banjo5_gdgbd',
         label: 'Banjo 5-string (gDGBD)',
-        // Open-G 5-string banjo (MIDI 67,50,55,59,62). String 0 is the
-        // HIGH G4 drone — deliberately non-monotonic: banjo tab's bottom
-        // line is the 5th (drone) string, and the tuning is
-        // conventionally written drone-first (gDGBD). Non-monotonic
-        // targets are handled by resolveTargetForFret's pitch-ordered
-        // walk (retune-engine.js — added for exactly this preset; the
-        // solver was always index-order-agnostic), so the drone simply
-        // renders as the bottom lane. The drone string's short neck (no
-        // frets below its 5th) is NOT modeled — see PLANNING.md "Future
-        // enhancements". Duplicate notes share their note-parallel hue.
+        // Open-G 5-string banjo (MIDI 67,50,55,59,62). String 0 is the HIGH
+        // G4 drone — deliberately non-monotonic (banjo tab's bottom line
+        // is the drone string, written drone-first); handled by
+        // resolveTargetForFret's pitch-ordered walk (retune-engine.js,
+        // added for this preset). The drone's short neck (no frets below
+        // its 5th) is NOT modeled. Duplicate notes share their
+        // note-parallel hue.
         strings: ['G4', 'D3', 'G3', 'B3', 'D4'],
         colors: ['#f18313', '#3fc413', '#f18313', '#1096e6', '#3fc413'],
         maxFret: 24,
@@ -328,24 +295,17 @@ export function arrangementClassFor(arrangementName) {
 }
 
 // Resolves an active-tuning id to { id, strings, colors, roles, maxFret,
-// capo, capoEnabled, octaveOffset } against the built-in presets first
-// (an unset id resolves to the arrangement class's default — EADG for
-// bass, EADGBE for rhythm/lead), then a caller-supplied custom-tuning
-// list, falling back to the class-default preset for an id that matches
-// neither — an unknown or deleted one — so a stale id can never leave a
-// caller without a usable tuning. `id` is the RESOLVED id (the fallback
-// preset's own id when the input id matched nothing) — screen.js keys
-// its per-tuning capo/octave overrides by it. `roles` is non-null only
-// for a preset that carries an explicit per-position role array (EADGBE
-// today); custom tunings always resolve roles: null since they carry
-// concrete colors. `maxFret` on a custom tuning falls back to
-// DEFAULT_MAX_FRET when missing/invalid. `capo`/`octaveOffset`/
-// `capoEnabled` default to 0/0/false when missing/invalid; capo is
-// validated against the profile's OWN resolved maxFret, so shrinking a
-// tuning's max fret below a saved capo silently disables the capo rather
-// than leaving an impossible neck. Pure: the caller owns reading
-// `id`/`customTunings` from wherever they're persisted (screen.js:
-// global settings storage; settings.html: localStorage).
+// capo, capoEnabled, octaveOffset }: built-in presets first (unset id ->
+// the arrangement class's default), then a caller-supplied custom-tuning
+// list, falling back to the class-default preset for an id matching
+// neither (a stale/deleted id never leaves a caller without a usable
+// tuning). `id` is the RESOLVED id — screen.js keys per-tuning capo/
+// octave overrides by it. `roles` is non-null only for a preset carrying
+// an explicit per-position role array; customs always resolve roles:
+// null. `maxFret`/`capo`/`capoEnabled`/`octaveOffset` fall back to sane
+// defaults when missing/invalid; capo is validated against the profile's
+// OWN maxFret, so shrinking it below a saved capo silently disables the
+// capo. Pure: the caller owns reading `id`/`customTunings` from storage.
 export function resolveActiveTuning(id, customTunings, arrClass = 'bass') {
     const targetId = id || defaultTuningIdForClass(arrClass);
     // .slice() on preset strings/roles: they're shared module constants —
@@ -393,18 +353,13 @@ export function resolveActiveTuning(id, customTunings, arrClass = 'bass') {
 export const ACTIVE_TUNING_ID = '__user_defined__';
 export const ACTIVE_TUNING_NAME = 'User-defined';
 
-// Parses + validates the persisted active tuning (JSON string as stored, or an
-// already-parsed object). Returns the same shape resolveActiveTuning
-// yields — { id, name, strings, colors, roles, maxFret, capo,
-// capoEnabled, octaveOffset } with id/name fixed to the active-tuning
-// constants — or null when the active tuning is absent/malformed (callers
-// then fall through to normal profile resolution). Colors pass through as
-// stored, exactly like resolveActiveTuning's custom-tuning branch: the
-// reader owns resolving them (screen.js runs CR.resolveColorsArray over
-// customs and the active tuning alike). capo is validated against the
-// active tuning's OWN resolved maxFret, octaveOffset against the fixed
-// bounds, capoEnabled defaults false — same rules as a saved custom
-// tuning.
+// Parses + validates the persisted active tuning (JSON string or an
+// already-parsed object). Returns resolveActiveTuning's shape — { id,
+// name, strings, colors, roles, maxFret, capo, capoEnabled, octaveOffset
+// } with id/name fixed to the active-tuning constants — or null when
+// absent/malformed (callers fall through to normal profile resolution).
+// Same capo/octaveOffset/capoEnabled rules as a saved custom tuning;
+// colors pass through as stored, for the reader to resolve.
 export function parseActiveTuning(raw) {
     let d = raw;
     if (typeof d === 'string') {
