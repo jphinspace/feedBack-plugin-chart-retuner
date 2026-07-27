@@ -41,8 +41,8 @@ const vm = (open, pairs) => pairs.map(([s, f]) => {
     const midi = open[s] + f;
     return { s, f, midi, pc: ((midi % 12) + 12) % 12 };
 });
-// Ladder rungs -> sorted arrays for order-insensitive comparison.
-const rungsAsArrays = ladder => ladder.map(set => [...set].sort((a, b) => a - b));
+// Ladder levels -> sorted arrays for order-insensitive comparison.
+const levelsAsArrays = ladder => ladder.map(set => [...set].sort((a, b) => a - b));
 // Solver voicing -> [{s,f}] sorted by string for stable comparison.
 const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
 
@@ -76,7 +76,7 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
         fingersNeeded(v([[1, 0], [2, 2], [3, 2], [4, 2], [5, 0]])), 1);
     check('fingers: G major (320003) = 3',
         fingersNeeded(v([[0, 3], [1, 2], [2, 0], [3, 0], [4, 0], [5, 3]])), 3);
-    // No barre (single min-fret note), no runs (nothing contiguous same-fret).
+    // Five isolated frets, no shared barre or run — each needs its own finger.
     check('fingers: scattered 5 fretted notes = 5',
         fingersNeeded(v([[0, 1], [1, 3], [2, 2], [3, 4], [4, 3]])), 5);
 
@@ -133,15 +133,15 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
 {
     const cMaj = chordSpecFromNotes(E_STD, v([[1, 3], [2, 2], [3, 0], [4, 1], [5, 0]]), 'C');
     check('ladder: major triad chord = full -> root+5th -> root',
-        rungsAsArrays(degradationLadder(cMaj)), [[0, 4, 7], [0, 7], [0]]);
+        levelsAsArrays(degradationLadder(cMaj)), [[0, 4, 7], [0, 7], [0]]);
     // Am7 (x02010): A2 E3 G3 C4 E4 -> pcs {9,4,7,0}, root 9.
     const am7 = chordSpecFromNotes(E_STD, v([[1, 0], [2, 2], [3, 0], [4, 1], [5, 0]]), 'Am7');
     check('ladder: 7th chord = full -> triad -> dyad -> root',
-        rungsAsArrays(degradationLadder(am7)), [[0, 4, 7, 9], [0, 4, 9], [4, 9], [9]]);
+        levelsAsArrays(degradationLadder(am7)), [[0, 4, 7, 9], [0, 4, 9], [4, 9], [9]]);
     // D5 in Drop D (000xxx): D2 A2 D3 -> pcs {2,9}, no third.
     const d5 = chordSpecFromNotes(DROP_D, v([[0, 0], [1, 0], [2, 0]]), 'D5');
     check('ladder: power chord = dyad -> root',
-        rungsAsArrays(degradationLadder(d5)), [[2, 9], [2]]);
+        levelsAsArrays(degradationLadder(d5)), [[2, 9], [2]]);
 }
 
 // scoreVoicing — the source voicing itself scores 0.
@@ -172,7 +172,7 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
     const notes = v([[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]);
     const spec = chordSpecFromNotes(EB_STD, notes, 'Eb');
     const r = solveChord(spec, E_STD, null);
-    check('Eb->E: revoiced/rung', { revoiced: r.revoiced, rung: r.rung }, { revoiced: true, rung: 0 });
+    check('Eb->E: revoiced/degradeLevel', { revoiced: r.revoiced, degradeLevel: r.degradeLevel }, { revoiced: true, degradeLevel: 0 });
     check('Eb->E: revoiced near open position',
         r.placements.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s),
         v([[1, 1], [2, 1], [3, 0], [4, 4]]));
@@ -244,7 +244,7 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
     const r = solveChord(spec, [40], null);
     check('1-string target: bare root note', r.placements.length, 1);
     check('1-string target: sounds the root pc', ((40 + r.placements[0].f) % 12 + 12) % 12, 0);
-    check('1-string target: deepest rung', r.rung, degradationLadder(spec).length - 1);
+    check('1-string target: deepest degrade level', r.degradeLevel, degradationLadder(spec).length - 1);
 }
 
 // solveChord — determinism: identical inputs, identical outputs.
@@ -253,9 +253,10 @@ const shape = voicing => voicing.map(({ s, f }) => ({ s, f })).sort((a, b) => a.
     check('determinism', solveChord(spec, E_STD, null), solveChord(spec, E_STD, null));
 }
 
-// maxFret: solveVoicingSearch/solveChord respect the ceiling passed in
-// (defaults to DEFAULT_MAX_FRET, the historical hardcoded 20 — every test
-// above that omits it exercises that default), not a fixed constant.
+// maxFret: solveVoicingSearch/solveChord treat the ceiling as a runtime
+// parameter, defaulting to DEFAULT_MAX_FRET (the historical hardcoded
+// 20 — every test above that omits it exercises that default) but
+// honoring whatever value the caller passes.
 {
     // Single-string target tuned to pc 1 (MIDI 1): the root pc (C, pc 0)
     // only reappears at fret 11 (mod-12 periodicity, 1+11=12) or fret 23 —
@@ -436,8 +437,8 @@ const sf = ns => ns.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
 }
 
 // 7-string GP source onto a 6-string EADGBE target: low-string chord
-// content degrades per chord, nothing crashes, single notes below range
-// still drop.
+// content degrades gracefully per chord, the pipeline stays stable
+// throughout, and single notes below range still drop.
 {
     const retuner = CR.createRetuner();
     const chord = { t: 0, id: 0, notes: v([[0, 0], [1, 0], [2, 0]]) }; // B1 E2 A2
@@ -582,12 +583,12 @@ const sf = ns => ns.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
     assert.ok(tiny.nodes <= 0, 'tiny budget consumed'); passed++;
     assert.ok(elapsed < 1000, `tiny-budget solve returned promptly (${elapsed}ms)`); passed++;
 
-    // One shared budget across the whole solveChord call: after a heavy
-    // solve, later ladder rungs draw from whatever is left — never a
-    // fresh budget per rung.
+    // One shared budget spans the whole solveChord call: after a heavy
+    // solve, later ladder levels draw from whatever budget remains,
+    // carried forward level to level.
     const shared = { nodes: 200, aborted: false };
     solveChord(heavySpec, WIDE8, null, 24, { budget: shared });
-    assert.ok(shared.nodes <= 0 && shared.aborted, 'shared budget spans the rung ladder'); passed++;
+    assert.ok(shared.nodes <= 0 && shared.aborted, 'shared budget spans the degradation ladder'); passed++;
 
     // An ample explicit budget must not change the result vs. the
     // default path (same chord solved with and without opts).

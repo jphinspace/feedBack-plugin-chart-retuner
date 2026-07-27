@@ -17,14 +17,15 @@ function _letterAccidentalValue(letter, accidental) {
 
 // Normalized pitch class (0..11) for a bare letter + optional accidental
 // ('C', 'F#', 'Bb') — the octave-less half of parseTargetNote, shared
-// with chord-name root parsing (chord-solver.js) so the two can't drift.
+// with chord-name root parsing (chord-solver.js), keeping the two in sync.
 export function notePitchClass(letter, accidental) {
     const v = _letterAccidentalValue(letter, accidental || '');
     return v === null ? null : ((v % 12) + 12) % 12;
 }
 
-// Parses "B0" / "Bb1" / "F#2" / "A-1" (scientific pitch notation, C4 = MIDI 60).
-// Returns { midi, label } or null. label keeps the input's own spelling (Bb, not A#).
+// Parses a note in scientific pitch notation (C4 = MIDI 60). Returns
+// { midi, label } or null; label keeps the input's own spelling (Bb,
+// not A#).
 export function parseTargetNote(spec) {
     if (typeof spec !== 'string') return null;
     const m = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(spec.trim());

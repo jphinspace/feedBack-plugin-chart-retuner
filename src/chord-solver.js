@@ -1,52 +1,50 @@
 // Chart Retuner — chord-aware remapping (the guitar-chords feature). One
-// of the pure-logic modules chart-retune.js aggregates into `CR`; never
-// imports retune-engine.js, keeping that dependency one-way (it supplies
-// this module's exact-candidate input, not the reverse).
+// of the pure-logic modules chart-retune.js aggregates into `CR`, kept
+// one-way with retune-engine.js: that module calls into this one,
+// supplying this module's exact-candidate input.
 //
 // A per-note pitch-preserving remap can drop notes or break an open
 // chord's shape under a shifted tuning, so this module solves a
 // comparable voicing on the TARGET tuning instead. Priority order: 1)
 // playable (<=MAX_CHORD_SPAN fret box, <=4 fingers, unless the source
 // itself was wider), 2) hand shape close to the source (openness, barre,
-// position), 3) root in the bass. Identity = pitch-class set + root —
-// exact sounded pitches are strongly preferred, octave doublings may
-// change when they aren't playable.
+// position), 3) root in the bass. Identity = pitch-class set + root.
+// Exact sounded pitches are strongly preferred; octave doublings adapt
+// to keep the result playable.
 //
 // Dispatch (solveChord): the exact per-note remap wins outright when
 // it's collision-free and playable. Otherwise a pitch-class revoicing
-// search (solveVoicingSearch) runs down a degradation ladder — full
-// pitch-class set first, then triad, root+5th, bare root — each rung
-// costed so a fuller solution always wins unless far worse. Every result
-// carries `revoiced` (false only for the exact remap) and `rung` (which
-// ladder step won). No candidate solves -> null (same drop contract as
-// an unplayable single note).
+// search (solveVoicingSearch) runs down a degradation ladder (full
+// pitch-class set, then triad, root+5th, bare root), each level costed
+// so a fuller solution wins unless far worse. Every result carries
+// `revoiced` and `degradeLevel` (which step won); no candidate solving
+// returns null.
 
 import { notePitchClass } from './pitch.js';
 import { DEFAULT_MAX_FRET } from './target-tuning.js';
 
-// Max fretted-fret difference within one chord: 3 = a four-fret box
-// (e.g. frets 5-6-7-8). A "5+ fret stretch" (max − min ≥ 4) is only
-// allowed when the source chord itself carried one.
+// Max fretted-fret difference within one chord (a four-fret box). A
+// wider stretch is only allowed when the source chord itself carried
+// one.
 export const MAX_CHORD_SPAN = 3;
 export const MAX_FRETTING_FINGERS = 4;
 
-// Safety valve: max DFS nodes per solveChord call (shared across its
-// degradation-ladder rungs). Real chart chords need hundreds to a few
-// thousand nodes; the cap only bites on pathological data (a huge-span
-// many-pitch-class group on a wide target defeats branch-and-bound
-// pruning and can otherwise burn seconds on the render thread). On
-// exhaustion the search stops and returns the best voicing found so far
-// — possibly null, which callers treat as "solver gave up", NOT
-// "unsoundable" (createRetuner falls back to the per-note path).
+// Safety valve: max DFS nodes per solveChord call, shared across its
+// degradation-ladder levels. The cap only bites on pathological data (a
+// huge-span many-pitch-class group defeats branch-and-bound pruning),
+// where it can otherwise burn seconds on the render thread. On
+// exhaustion, the search returns its best voicing so far, possibly null
+// — callers treat that as "solver gave up" (fall back to per-note)
+// rather than "unsoundable".
 export const MAX_SEARCH_NODES = 20000;
 
-// Additive cost weights, lower = better. Starting points, tuned by the
-// test suite — the invariants that matter: playability is a hard
-// constraint (not a weight); the shape terms (EXACT_PITCH_MISS on every
-// note of a relocated voicing, OPENNESS_MISMATCH, BARRE_INTRODUCED,
-// POSITION_DISTANCE) collectively outweigh ROOT_NOT_IN_BASS, encoding
-// priority 2 > 3; DEGRADE_RUNG dwarfs everything else so a reduced
-// chord only wins when the fuller rung has no acceptable voicing at all.
+// Additive cost weights, lower = better; tuned by the test suite.
+// Playability is enforced as a hard constraint ahead of these weighted
+// terms. The shape terms (EXACT_PITCH_MISS, OPENNESS_MISMATCH,
+// BARRE_INTRODUCED, POSITION_DISTANCE) collectively outweigh
+// ROOT_NOT_IN_BASS, encoding priority 2 > 3. DEGRADE_LEVEL dwarfs
+// everything else, so a reduced chord only wins when the fuller level
+// has no acceptable voicing.
 export const SOLVER_WEIGHTS = {
     EXACT_PITCH_MISS: 40,   // per target note not among the source's sounded pitches
     DROPPED_NOTE: 30,       // per source note whose pitch class vanished entirely
@@ -58,21 +56,20 @@ export const SOLVER_WEIGHTS = {
     REGISTER_DISTANCE: 2,   // per semitone |target bass note − source bass note|
     NOTE_COUNT_DIFF: 4,     // per |target note count − source note count|
     INNER_MUTE: 10,         // per muted string strictly between sounded strings
-    DEGRADE_RUNG: 500,      // per degradation-ladder rung
+    DEGRADE_LEVEL: 500,     // per degradation-ladder level
 };
 
 function pcOf(midi) {
     return ((midi % 12) + 12) % 12;
 }
 
-// Root (and slash bass, if any) pitch class from a chord template name:
-// 'Am7' -> { rootPc: 9, bassPc: null }, 'C/G' -> { rootPc: 0, bassPc: 7 },
-// 'F#5' -> { rootPc: 6, bassPc: null }. Returns null when the name doesn't
-// start with a note letter (GP imports carry junk/empty names). The caller
-// validates the parsed root against the actually-sounded pitch classes —
-// a name that contradicts the notes loses to the lowest sounded pitch.
-// Letter/accidental -> pitch-class parsing is pitch.js's notePitchClass —
-// the same table parseTargetNote uses, so the two can't drift.
+// Root (and slash bass, if any) pitch class from a chord template name.
+// Returns null unless the name starts with a note letter (GP imports
+// carry junk/empty names); the caller validates the parsed root against
+// the actually-sounded pitch classes, so a name that contradicts the
+// notes loses to the lowest sounded pitch. Uses pitch.js's
+// notePitchClass, keeping letter/accidental parsing in sync with
+// parseTargetNote.
 export function parseChordRootFromName(name) {
     if (typeof name !== 'string') return null;
     const m = /^\s*([A-Ga-g])([#b])?/.exec(name);
@@ -84,8 +81,8 @@ export function parseChordRootFromName(name) {
 }
 
 // Groups a fretted-note list (sorted by string) into maximal
-// contiguous-string same-fret runs — a run is frettable with one finger
-// laid across it (ring-finger mini-barre), e.g. the 2-2-2 of A major.
+// contiguous-string same-fret runs, each frettable with one finger laid
+// across it (a mini-barre).
 function _contiguousRuns(frettedSortedByString) {
     const runs = [];
     for (const n of frettedSortedByString) {
@@ -101,11 +98,10 @@ function _contiguousRuns(frettedSortedByString) {
 }
 
 // Fingers needed to fret `voicing` ([{ s, f }], one note per string): a
-// full barre at the chord's min fret counts as one finger (when valid —
-// barreIsValid), and each contiguous same-fret run elsewhere counts as
-// one (mini-barre). Open strings are free. Deliberately permissive —
-// this gates playability; computeChordFingers below draws diagrams and
-// prefers one-finger-per-note assignments.
+// full barre at the chord's min fret counts as one (when valid, per
+// barreIsValid); each contiguous same-fret run elsewhere counts as one
+// mini-barre. Open strings are free. Deliberately permissive, since this
+// only gates playability (computeChordFingers below draws diagrams).
 export function fingersNeeded(voicing) {
     const fretted = voicing.filter(n => n.f > 0).sort((a, b) => a.s - b.s);
     if (fretted.length === 0) return 0;
@@ -117,10 +113,9 @@ export function fingersNeeded(voicing) {
     return (useBarre ? 1 : 0) + _contiguousRuns(rest).length;
 }
 
-// A barre at the chord's min fretted fret lies across every string from
-// the lowest barred string up — so it's invalid when any OPEN note
-// sounds on a string the barre would cover (at or above the lowest
-// same-min-fret string).
+// A barre at the chord's min fretted fret covers every string from the
+// lowest barred string up, so it's invalid when an open note sounds on
+// any string at or above that point.
 export function barreIsValid(voicing) {
     const fretted = voicing.filter(n => n.f > 0);
     if (fretted.length < 2) return false;
@@ -152,11 +147,10 @@ export function voicingPlayable(voicing, spec) {
 
 // Builds the solver's view of one source chord from its notes
 // ([{ s, f, ... }], source-string indexed) under the source tuning
-// (sourceOpenMidiByString — capo already folded in upstream, so f === 0
-// means "open at the capo", zero fingers). templateName seeds the root
-// when it parses AND agrees with the sounded pitch classes; otherwise
-// the lowest sounded pitch is the root (right for the overwhelming
-// majority of guitar chart chords). Returns null when no note sounds.
+// (sourceOpenMidiByString, capo already folded in). templateName seeds
+// the root when it parses and agrees with the sounded pitch classes;
+// otherwise the lowest sounded pitch is the root. Returns null when no
+// note sounds.
 export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) {
     const specNotes = [];
     for (let i = 0; i < notes.length; i++) {
@@ -206,30 +200,29 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) 
 }
 
 // The degradation ladder: required pitch-class sets from fullest to
-// barest, consecutive duplicates removed. Interval preferences off the
-// root: third = 4 (major) else 3 (minor), fifth = 7 (perfect) else
-// 6 (dim) else 8 (aug) — only intervals actually present in the source
-// chord are ever required.
+// barest, consecutive duplicates removed. Third = 4 semitones (major)
+// else 3 (minor); fifth = 7 (perfect) else 6 (dim) else 8 (aug); only
+// intervals actually present in the source chord are required.
 export function degradationLadder(spec) {
     const has = pc => spec.pcs.has(pc);
     const iv = semis => pcOf(spec.rootPc + semis);
     const third = [4, 3].map(iv).find(has);
     const fifth = [7, 6, 8].map(iv).find(has);
-    const rungs = [new Set(spec.pcs)];
+    const levels = [new Set(spec.pcs)];
     const triad = new Set([spec.rootPc]);
     if (third !== undefined) triad.add(third);
     if (fifth !== undefined) triad.add(fifth);
-    rungs.push(triad);
+    levels.push(triad);
     const dyad = new Set([spec.rootPc]);
     const partner = fifth !== undefined ? fifth : third;
     if (partner !== undefined) dyad.add(partner);
-    rungs.push(dyad);
-    rungs.push(new Set([spec.rootPc]));
+    levels.push(dyad);
+    levels.push(new Set([spec.rootPc]));
     const out = [];
-    for (const r of rungs) {
+    for (const level of levels) {
         const prev = out[out.length - 1];
-        if (prev && prev.size === r.size && [...r].every(pc => prev.has(pc))) continue;
-        out.push(r);
+        if (prev && prev.size === level.size && [...level].every(pc => prev.has(pc))) continue;
+        out.push(level);
     }
     return out;
 }
@@ -269,16 +262,15 @@ export function scoreVoicing(spec, voicing) {
 }
 
 // Searches every hand position for the min-cost playable voicing whose
-// notes all belong to `requiredPcs`, covering every pc in it at least
-// once. DFS over target strings (mute | open-if-in-set | in-set window
-// frets) with branch-and-bound on the partial EXACT_PITCH_MISS cost;
-// positions visited nearest-to-source first so the bound tightens early.
-// Voicing size is capped at the source note count (opts.maxNotes) so
-// _origNote/scoring semantics downstream stay sane. Returns
+// notes all belong to `requiredPcs`, covering every pc at least once.
+// DFS over target strings (mute | open-if-in-set | in-set window frets)
+// with branch-and-bound on the partial EXACT_PITCH_MISS cost; positions
+// visited nearest-to-source first so the bound tightens early. Voicing
+// size is capped at the source note count. Returns
 // { voicing: [{ s, f, midi, pc }], cost } or null.
 //
 // opts.budget (optional): a shared { nodes, aborted } counter, decremented
-// per DFS node — pass the SAME object across the solveChord ladder rungs
+// per DFS node — pass the SAME object across the solveChord ladder levels
 // to bound one chord's work as a whole. Omitted -> a fresh
 // MAX_SEARCH_NODES budget per call.
 export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, maxFret = DEFAULT_MAX_FRET) {
@@ -289,8 +281,8 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
     const maxNotes = Math.min((opts && opts.maxNotes) || spec.noteCount, nStr);
     if (maxNotes < requiredPcs.size) return null;
     // Clamped so the position loop below always has at least p=1 (a
-    // window covering the whole neck): a degenerate source span >= 20
-    // (extreme GP import) must widen the search, never empty it — an
+    // window covering the whole neck): a degenerate source span must
+    // still widen the search while keeping the loop non-empty, since an
     // empty loop would also skip the open-string candidates it gates.
     const allowedSpan = Math.min(Math.max(MAX_CHORD_SPAN, spec.span), maxFret - 1);
     const pcsArr = [...requiredPcs];
@@ -355,11 +347,10 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
 
 // Matches each solved target note back to a distinct source note (for
 // _origNote scoring linkage and technique carry-over): exact MIDI match
-// first, then nearest same-pitch-class, then nearest by pitch — always
-// among the not-yet-used source notes; target notes are matched in
-// ascending pitch order for determinism. Returns [{ srcIndex, s, f }]
-// where srcIndex indexes the notes array chordSpecFromNotes was built
-// from (spec.notes[k].idx).
+// first, then nearest same-pitch-class, then nearest by pitch, always
+// among not-yet-used source notes. Target notes are matched in ascending
+// pitch order for determinism. Returns [{ srcIndex, s, f }], srcIndex
+// indexing the notes array chordSpecFromNotes was built from.
 export function matchVoicingToSource(voicing, spec) {
     const used = new Set();
     const ordered = voicing.slice().sort((a, b) => a.midi - b.midi || a.s - b.s);
@@ -394,20 +385,17 @@ export function matchVoicingToSource(voicing, spec) {
     return placements;
 }
 
-// Dispatch for one chord. `exactCandidate` is the caller-computed exact
-// per-note result ([{ srcIndex, s, f }] or null) — accepted when it
-// covers every spec note and is playable, or is the source voicing
-// verbatim. Otherwise runs the degradation ladder, comparing rungs on
-// cost + rung*DEGRADE_RUNG (early break once no later rung can win).
-// Returns { placements, revoiced, rung } or null (drop the chord).
-// `revoiced` is false only for the exact-candidate path; `rung` (0 =
-// full pitch-class set, higher = more degraded) is 0 there too, since it
-// doesn't apply. `maxFret` is the active tuning profile's own ceiling.
+// Dispatch for one chord. `exactCandidate` ([{ srcIndex, s, f }] or
+// null) is accepted when it covers every spec note and is playable, or
+// is the source voicing verbatim. Otherwise runs the degradation ladder,
+// comparing levels on cost + degradeLevel*DEGRADE_LEVEL, breaking early
+// once no later level can win. Returns { placements, revoiced,
+// degradeLevel } or null. `revoiced` is false only for the
+// exact-candidate path, where `degradeLevel` is always 0.
 //
 // opts.budget (optional): one { nodes, aborted } object shared across
-// every ladder rung, bounding a pathological chord as a WHOLE (see
-// MAX_SEARCH_NODES) — `aborted` tells "gave up" (fall back to per-note)
-// from a genuine "nothing soundable" null.
+// every ladder level, bounding the whole chord's work. `aborted`
+// distinguishes "solver gave up" from a genuine unsoundable null.
 export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEFAULT_MAX_FRET, opts) {
     if (!spec || spec.notes.length === 0) return null;
     if (Array.isArray(exactCandidate) && exactCandidate.length === spec.notes.length) {
@@ -418,37 +406,36 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
         });
         const voicing = exactCandidate.map(pl => ({ s: pl.s, f: pl.f }));
         if (identity || voicingPlayable(voicing, spec)) {
-            return { placements: exactCandidate, revoiced: false, rung: 0 };
+            return { placements: exactCandidate, revoiced: false, degradeLevel: 0 };
         }
     }
     const W = SOLVER_WEIGHTS;
     const budget = (opts && opts.budget) || { nodes: MAX_SEARCH_NODES, aborted: false };
-    const rungs = degradationLadder(spec);
+    const levels = degradationLadder(spec);
     let best = null;
-    for (let r = 0; r < rungs.length; r++) {
+    for (let level = 0; level < levels.length; level++) {
         if (budget.nodes <= 0) { budget.aborted = true; break; }
-        const found = solveVoicingSearch(spec, rungs[r], targetMidiTuning, { maxNotes: spec.noteCount, budget }, maxFret);
+        const found = solveVoicingSearch(spec, levels[level], targetMidiTuning, { maxNotes: spec.noteCount, budget }, maxFret);
         if (found) {
-            const total = found.cost + r * W.DEGRADE_RUNG;
+            const total = found.cost + level * W.DEGRADE_LEVEL;
             if (!best || total < best.total) {
                 const placements = matchVoicingToSource(found.voicing, spec);
-                if (placements) best = { total, placements, revoiced: true, rung: r };
+                if (placements) best = { total, placements, revoiced: true, degradeLevel: level };
             }
         }
-        // No later rung (baseline (r+1) * DEGRADE_RUNG) can beat this.
-        if (best && best.total <= (r + 1) * W.DEGRADE_RUNG) break;
+        // No later level (baseline (level+1) * DEGRADE_LEVEL) can beat this.
+        if (best && best.total <= (level + 1) * W.DEGRADE_LEVEL) break;
     }
-    return best ? { placements: best.placements, revoiced: best.revoiced, rung: best.rung } : null;
+    return best ? { placements: best.placements, revoiced: best.revoiced, degradeLevel: best.degradeLevel } : null;
 }
 
 // Plausible finger numbers for a remapped chord template (frets-by-
-// target-string, -1 = unused, 0 = open, n = fret). Prefers canonical
-// one-finger-per-note in ascending (fret, string) order, falls back to a
-// barre (same-fret notes at the min fret share finger 1, per
-// barreIsValid) then contiguous-run mini-barre grouping when there are
-// more fretted notes than fingers. Deliberately conservative: anything
-// still ambiguous returns all -1 (GP imports already render this way) —
-// a wrong finger number is worse than none.
+// target-string; -1 = unused, 0 = open, n = fret). Prefers canonical
+// one-finger-per-note in ascending (fret, string) order, falling back to
+// a barre (per barreIsValid) then contiguous-run mini-barre grouping
+// when there are more fretted notes than fingers. Anything still
+// ambiguous returns all -1, since a wrong finger number is worse than
+// none.
 export function computeChordFingers(fretsByTargetString) {
     const n = fretsByTargetString.length;
     const fingers = new Array(n).fill(-1);

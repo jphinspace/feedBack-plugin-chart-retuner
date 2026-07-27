@@ -180,8 +180,8 @@ const SPOT_FRETS = [0, 10, 20];
         resolveTargetForFret(75, 1, 8, banjo5), { s: 0, f: 16, adjustment: 8 });
 
     // Completeness sweep: a standard-guitar chart remapped onto banjo5
-    // must never drop a note that SOME banjo string could play, and every
-    // kept note must sound its exact source pitch.
+    // must always place a note that SOME banjo string could play, and
+    // every kept note must sound its exact source pitch.
     const src = computeOpenStringMidiByString(6, [0, 0, 0, 0, 0, 0], 0);
     const k = computeArrangementShift(6, [0, 0, 0, 0, 0, 0], 0, src, banjo5);
     let wronglyDropped = 0, pitchErrors = 0;
@@ -201,8 +201,8 @@ const SPOT_FRETS = [0, 10, 20];
     // now FINDS the legitimate placement the index walk oscillated past.
     check('pitch-adjacent >20-semitone gap: resolves instead of hanging',
         resolveTargetForFret(45, 1, 15, [40, 35, 62, 55, 59, 64]), { s: 0, f: 20, adjustment: 5 });
-    // And when nothing fits anywhere, the direction lock returns null
-    // (this monotonic huge-gap case also looped forever before).
+    // And when no placement fits anywhere, the direction lock returns
+    // null (this monotonic huge-gap case also looped forever before).
     check('monotonic >20-semitone adjacent gap with no fit terminates with null',
         resolveTargetForFret(50, 0, 5, [28, 60, 65, 70]), null);
 }
@@ -270,36 +270,35 @@ const SPOT_FRETS = [0, 10, 20];
     ];
     const remappedOpenDonor = remapAnchors(openDonorAnchors, openDonorNotes);
     check('anchor before open-string note uses fretted-note adjustment', remappedOpenDonor[0], { time: 0, fret: 2, width: 4 });
-    // The open note (t=1) ties the anchor's own start time, so it can't
-    // become a separate split (two anchors can't share one timestamp) —
-    // it instead forces the uncapped single-band fallback (see the
-    // "Anchor widening" block below), widening past the normal cap.
+    // The open note (t=1) shares the anchor's own start time, and
+    // anchors need distinct timestamps to split — so it triggers the
+    // uncapped single-band fallback instead (see the "Anchor widening"
+    // block below), widening past the normal cap.
     check('anchor aligned with an open note that is now fretted: forces the uncapped fallback',
         remappedOpenDonor[1], { time: 1, fret: 4, width: 7 });
 }
 
 // Anchor widening: a note open in the source (no hand position needed)
 // that lands on a nonzero target fret after retuning DOES need one, and
-// the source chart's own anchors were never authored to cover it. Three
-// tiers, in order of preference:
+// the source chart's own anchors predate it entirely. Three tiers, in
+// order of preference:
 //  1. Modest widening (within HAND_JUMP_FRET_THRESHOLD, ANCHOR_DONOR_
 //     WINDOW_S) — the band stretches a little, still one hand position.
 //  2. A clean split: a note past either bound seeds a brand-new anchor
-//     of its own instead of being left uncovered (Bon Jovi "It's My
-//     Life", Bass: a comfortable fret-8 run, then — seconds later, no
-//     jump involved at all — a comfortable fret-1 run; a retune with
-//     non-uniform per-string offsets, Drop C -> BEADG here, stretched a
-//     passage that was compact on the source instrument apart on the
-//     target one).
+//     of its own so it stays covered (a comfortable run at one fret,
+//     then — seconds later, no jump involved at all — a comfortable run
+//     at a different fret; a retune with non-uniform per-string offsets
+//     can stretch a passage that was compact on the source instrument
+//     apart on the target one).
 //  3. Falling back to ONE band spanning the whole chart anchor, widened
-//     without a cap: used when a clean split isn't possible — either
+//     without a cap: used when a clean split is impossible — either
 //     because it would take more than ANCHOR_MAX_SPLITS (a fast,
 //     repeating alternation would otherwise flicker through dozens of
-//     tiny anchors — Alestorm "Drink", Bass: source open/fretted flip
-//     every ~0.3-0.5s for ~17s), or because the very first candidate
-//     ties the anchor's own start time (openDonorAnchors above) and so
-//     can't become a split at all. A wide-but-honest single anchor reads
-//     better than either a flicker or a band that's wrong from the start.
+//     tiny anchors), or because the very first candidate ties the
+//     anchor's own start time (openDonorAnchors above), which only a
+//     distinct-timestamp split could represent. A wide-but-honest single
+//     anchor reads better than either a flicker or a band that's wrong
+//     from the start.
 {
     // Tier 1: modest widening (within the cap) still works in both
     // directions.
@@ -339,8 +338,8 @@ const SPOT_FRETS = [0, 10, 20];
         ]),
         [{ time: 0, fret: 5, width: 4 }, { time: donorWindow + 1, fret: 4, width: 4 }]);
 
-    // Widening (and splitting) never uses a note outside the anchor's own
-    // span (that belongs to the next anchor instead).
+    // Widening (and splitting) only ever draws candidates from the
+    // anchor's own span; a note past it belongs to the next anchor.
     const risingNotes = [
         { t: 1, f: 2, _origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
         { t: 6, f: 7, _origNote: { t: 6, f: 0 } },  // newly fretted, but belongs to the NEXT anchor's span
@@ -350,16 +349,15 @@ const SPOT_FRETS = [0, 10, 20];
         { time: 5, fret: 2, width: 4 },
     ];
     const [risingWidened, risingNext] = remapAnchors(risingAnchors, risingNotes);
-    check('a note outside this anchor\'s span is not used to widen or split it',
+    check('a note outside this anchor\'s span is reserved for the next anchor',
         risingWidened, { time: 1, fret: 2, width: 4 });
-    check('...it widens the anchor whose span it actually falls in instead',
+    check('...where it widens that anchor instead',
         risingNext, { time: 5, fret: 2, width: 5 });
 
     // Tier 3a: a long passage — one open-in-source run (now fretted) tied
-    // to the anchor's own start, plus a normally fretted run later — is
-    // the exact shape of the real Alestorm "Drink" bug. The tie forces
-    // the uncapped fallback: one 7-fret band covering both runs, not a
-    // band stuck on the later (donor-derived) run alone.
+    // to the anchor's own start, plus a normally fretted run later. The
+    // tie forces the uncapped fallback: one 7-fret band covering both
+    // runs together, rather than only the later (donor-derived) run.
     const notes = [
         { t: 1, f: 1, _origNote: { t: 1, f: 0 } },  // newly fretted (was open), TIES the anchor's own start
         { t: 2, f: 1, _origNote: { t: 2, f: 0 } },  // newly fretted (was open)
@@ -376,26 +374,25 @@ const SPOT_FRETS = [0, 10, 20];
         untouched, { time: 10, fret: 3, width: 4 });
 
     // Tier 3b: a fast, repeating alternation (source open/fretted flipping
-    // every 0.2s) would otherwise produce far more than ANCHOR_MAX_SPLITS
-    // splits — falls back to one wide band instead of flickering through
-    // a dozen tiny anchors, the same shape as the rest of the real
-    // Alestorm "Drink" passage.
+    // every 0.2s, far enough apart in fret each time to force a split on
+    // every transition) would otherwise produce far more than
+    // ANCHOR_MAX_SPLITS splits — falls back to one wide band instead of
+    // flickering through a dozen tiny anchors.
     const rapidNotes = [];
     for (let i = 0; i < 10; i++) {
-        rapidNotes.push({ t: i * 0.4, f: 5, _origNote: { t: i * 0.4, f: 5 } });
+        rapidNotes.push({ t: i * 0.4, f: 8, _origNote: { t: i * 0.4, f: 8 } });
         rapidNotes.push({ t: i * 0.4 + 0.2, f: 1, _origNote: { t: i * 0.4 + 0.2, f: 0 } });
     }
     check('rapid alternation falls back to one wide band instead of many tiny splits',
-        remapAnchors([{ time: 0, fret: 5, width: 4 }], rapidNotes),
-        [{ time: 0, fret: 1, width: 8 }]);
+        remapAnchors([{ time: 0, fret: 8, width: 4 }], rapidNotes),
+        [{ time: 0, fret: 1, width: 11 }]);
 }
 
-// End-to-end through createRetuner: the Bon Jovi "It's My Life" shape --
-// Drop C (non-uniform per-string offsets) onto BEADG. A comfortable
-// fret-8 run right at the anchor must split cleanly into its own anchor
-// once the notes actually move to fret 1, seconds later — not get
-// dragged into a 9-fret span, and not get stuck showing fret 6 for a
-// passage that's actually at fret 1.
+// End-to-end through createRetuner: Drop C (non-uniform per-string
+// offsets) onto BEADG. A comfortable fret-8 run right at the anchor must
+// split cleanly into its own anchor once the notes actually move to
+// fret 1, seconds later — not get dragged into a 9-fret span, and not
+// get stuck showing fret 6 for a passage that's actually at fret 1.
 {
     const { createRetuner, resolveTargetTuning, BUILTIN_PRESET_TUNINGS } = CR;
     const beadg = BUILTIN_PRESET_TUNINGS.find(p => p.id === 'beadg');
@@ -419,12 +416,12 @@ const SPOT_FRETS = [0, 10, 20];
 }
 
 // reduceHandTravel: relocates a note reached via a large, fast cross-string
-// jump to an exact-pitch alternate on an adjacent string — the real-chart
-// case (Alestorm "Drink", Bass) was a source open string landing on target
-// fret 1, alternating rapidly with a fretted neighbor on fret 8 one string
-// over — an easy open-to-fretted jump in the source, a 7-fret unplayable
-// stretch after retuning. BEADG's perfect-fourths spacing means fret 8 on
-// one string is the same pitch as fret 3 on the next string up.
+// jump to an exact-pitch alternate on an adjacent string — the motivating
+// real-chart case was a source open string landing on target fret 1,
+// alternating rapidly with a fretted neighbor on fret 8 one string over —
+// an easy open-to-fretted jump in the source, a 7-fret unplayable stretch
+// after retuning. BEADG's perfect-fourths spacing means fret 8 on one
+// string is the same pitch as fret 3 on the next string up.
 {
     const { reduceHandTravel } = CR;
     const target = [0, 5, 10, 15]; // uniform fourths, easy arithmetic
@@ -536,21 +533,22 @@ const SPOT_FRETS = [0, 10, 20];
     check('reduceHandTravel: a source gap retuning made WORSE still fires',
         worsened.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 3 }, { s: 2, f: 13 }]);
 
-    // A big ORIGIN gap doesn't count as "already existed" when both notes
-    // came from the same SOURCE string (a slide/run, not a cross-string
-    // reach) -- only the post-remap cross-string gap matters here.
+    // "Already existed" only applies to a genuine cross-string reach in
+    // the source. When both notes came from the same SOURCE string (a
+    // slide/run), the origin gap is irrelevant -- only the post-remap
+    // cross-string gap matters here.
     const sameSourceString = [
         { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
         { t: 0.2, s: 1, f: 8, _origNote: { s: 0, f: 14 } },
     ];
     reduceHandTravel(sameSourceString, [0, 5, 10, 15], 20);
-    check('reduceHandTravel: a same-SOURCE-string origin gap does not count as already-existing',
+    check('reduceHandTravel: already-existing only counts a cross-string origin gap',
         sameSourceString.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 2, f: 3 }]);
 
-    // A side that was open in the source and is STILL open post-remap
-    // contributes nothing new -- it still counts toward "already existed"
-    // (unlike a side that became fretted, exercised by the "trill" test
-    // above via its lack of `_origNote`).
+    // A side that was open in the source and stays open post-remap
+    // counts toward "already existed" like any other unchanged side (a
+    // side that became fretted is the exception, exercised by the
+    // "trill" test above via its lack of `_origNote`).
     const stillOpen = [
         { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
         { t: 0.2, s: 1, f: 0, _origNote: { s: 1, f: 0 } },
@@ -563,20 +561,22 @@ const SPOT_FRETS = [0, 10, 20];
     // and legitimately relocates (natural s1/f10 -> s2/f5). B's TRUE
     // relationship to A is comfortable both before (source frets 3 vs 4,
     // gap 1) and after (natural frets 10 vs 11, gap 1) retuning -- B must
-    // stay put, not get dragged along purely because A was processed
-    // (and moved) first, one array slot earlier.
+    // stay put, evaluated on its own true relationship to A rather than
+    // dragged along purely because A was processed (and moved) first,
+    // one array slot earlier.
     const seedA_B = [
         { t: 0.0, s: 0, f: 2,  _origNote: { s: 0, f: 2 } },
         { t: 0.2, s: 1, f: 10, _origNote: { s: 1, f: 3 } },
         { t: 0.4, s: 3, f: 11, _origNote: { s: 3, f: 4 } },
     ];
     reduceHandTravel(seedA_B, [0, 5, 10, 15, 20, 25], 24);
-    check('reduceHandTravel: an unrelated neighbor relocation does not cascade to a comfortable note',
+    check('reduceHandTravel: a comfortable note stays put despite an unrelated neighbor\'s relocation',
         seedA_B.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 2, f: 5 }, { s: 3, f: 11 }]);
 }
 
 // createRetuner() end-to-end: the retune-attributable gate must hold
-// through the full pipeline, not just at the pure-function level.
+// across the full pipeline, from the pure-function level all the way
+// through the public API.
 {
     const { createRetuner, DEFAULT_TARGET_MIDI_TUNING } = CR;
 
@@ -600,8 +600,8 @@ const SPOT_FRETS = [0, 10, 20];
     }
 
     // A genuine differential per-string retune (only one string shifted
-    // hard) must still relocate the note it makes newly awkward, even
-    // through the full pipeline (not just the pure reduceHandTravel call).
+    // hard) must still relocate the note it makes newly awkward, all the
+    // way through the full pipeline built on top of reduceHandTravel.
     {
         const target = [0, 5, 10, 15, 20];
         const bundle = {
@@ -729,11 +729,12 @@ const SPOT_FRETS = [0, 10, 20];
 }
 
 // AEADG target, EADG source: proves the explicit targetMidiTuning
-// parameter is actually honored (not silently defaulting to BEADG).
-// AEADG's indices 1-4 are numerically identical to BEADG's, and a 4-string
-// EADG source never reaches index 0, so a full fret sweep here would just
-// re-run the EADG-identity block above against different-but-equal data —
-// one spot check is enough to prove the parameter takes effect.
+// parameter genuinely takes effect, rather than silently defaulting to
+// BEADG. AEADG's indices 1-4 are numerically identical to BEADG's, and a
+// 4-string EADG source stays confined to indices 1-4, so a full fret
+// sweep here would just re-run the EADG-identity block above against
+// different-but-equal data — one spot check is enough to prove the
+// parameter takes effect.
 {
     const aeadg = resolveTargetTuning(['A0', 'E1', 'A1', 'D2', 'G2']);
     check('AEADG target labels', aeadg.labels, ['A', 'E', 'A', 'D', 'G']);
@@ -801,9 +802,11 @@ const SPOT_FRETS = [0, 10, 20];
     bundle.notes = rawNotes; // simulate core re-supplying the raw array next frame
     retuner.apply(bundle, aeadg.midiTuning);
     check('createRetuner: changing target tuning invalidates the cache and re-remaps', bundle.notes[0].f, 2);
-    // assert.notStrictEqual, not check(): this asserts reference INEQUALITY
-    // (a new object, not merely an equal one), which check()'s deepStrictEqual can't express.
-    assert.notStrictEqual(bundle.notes[0], beforeAeadg, 'a target-tuning change must not reuse the previous remap object'); passed++;
+    // assert.notStrictEqual asserts reference INEQUALITY (a genuinely new
+    // object, distinct from one that's merely equal) -- check()'s
+    // deepStrictEqual only compares structure, so this needs the
+    // assert.notStrictEqual form directly.
+    assert.notStrictEqual(bundle.notes[0], beforeAeadg, 'a target-tuning change must produce a fresh remap object'); passed++;
 
     bundle.notes = rawNotes;
     retuner.apply(bundle);
@@ -921,7 +924,7 @@ const SPOT_FRETS = [0, 10, 20];
         parseActiveTuning({ strings: ['E1', 'A1', 'D2', 'G2'], maxFret: 14, capo: 13 }).capo, 13);
     check('parseActiveTuning: capo at/above its own maxFret disables to 0',
         parseActiveTuning({ strings: ['E1', 'A1', 'D2', 'G2'], maxFret: 14, capo: 14 }).capo, 0);
-    // Input arrays are copied, never aliased — the caller may mutate.
+    // Input arrays are copied, so the caller is free to mutate them.
     const aliasIn = { strings: ['E1', 'A1', 'D2', 'G2'], colors: ['#111111', '#222222', '#333333', '#444444'] };
     const aliased = parseActiveTuning(aliasIn);
     assert.notStrictEqual(aliased.strings, aliasIn.strings, 'parsed strings must be a fresh copy'); passed++;
@@ -1013,8 +1016,8 @@ const SPOT_FRETS = [0, 10, 20];
     check('displayFretOffset: template frets come back physical',
         bundle.chordTemplates[0].frets, [5, 7]);
     // Fingers are whatever the RELATIVE solve produced (for this adjusted
-    // remap the engine re-derives them: [1, 2]) — the display shift must
-    // never rewrite them, only the frets.
+    // remap the engine re-derives them: [1, 2]) — the display shift only
+    // touches the frets, leaving fingers exactly as solved.
     check('displayFretOffset: template fingers are untouched by the shift',
         bundle.chordTemplates[0].fingers, [1, 2]);
     check('displayFretOffset: an at-the-capo template note stays open (0), unused stays -1',
@@ -1041,8 +1044,8 @@ const SPOT_FRETS = [0, 10, 20];
     check('duplicate target: both unison notes survive as independent target strings', survivors.length, 2);
 }
 
-// Irregular-interval target: B0,E1,A1,D2,F#2 — D2->F#2 is a major third,
-// not the usual fourth.
+// Irregular-interval target: B0,E1,A1,D2,F#2 — D2->F#2 is a major third
+// rather than the usual fourth.
 {
     const irregular = resolveTargetTuning(['B0', 'E1', 'A1', 'D2', 'F#2']);
     check('irregular target midiTuning', irregular.midiTuning, [23, 28, 33, 38, 42]);
@@ -1361,7 +1364,8 @@ const SPOT_FRETS = [0, 10, 20];
 }
 
 // 6-string target (BEADG + a high string) — every remap function must
-// bound itself against the target's actual length, not a stale fixed 5.
+// bound itself against the target's actual length, dynamically rather
+// than a stale fixed 5.
 {
     const sixString = resolveTargetTuning(['B0', 'E1', 'A1', 'D2', 'G2', 'B2']);
     check('6-string target midiTuning', sixString.midiTuning, [23, 28, 33, 38, 43, 47]);
@@ -1588,11 +1592,11 @@ function mkBundle(raw) {
     assert.ok(uncappedBundle.notes.length >= cappedBundle.notes.length,
         'unbounded solve places at least as many notes'); passed++;
 
-    // maxSearchNodes: 0 is a valid, explicit "never search" configuration
-    // (immediate abort -> per-note fallback for every group) — it must
-    // not be treated as "unset" and silently fall back to the default
-    // budget (a `|| MAX_SEARCH_NODES` on the node count would do exactly
-    // that, since 0 is falsy).
+    // maxSearchNodes: 0 is a valid, explicit "immediate-abort" configuration
+    // (per-note fallback for every group) — it must be honored as this
+    // exact value, distinct from "unset" — a naive `|| MAX_SEARCH_NODES`
+    // on the node count would collapse the two (0 is falsy) and silently
+    // substitute the default budget instead.
     const zeroBudget = createRetuner({ maxSearchNodes: 0 });
     const zeroBundle = mkBundle(raw);
     zeroBudget.apply(zeroBundle, eadg);
@@ -1665,17 +1669,20 @@ function mkBundle(raw) {
     check('anchor donor: nearby exact donor beats the revoiced one',
         remapAnchors([{ time: 0.9, fret: 5, width: 4 }], [mk(1.0, 5, 17, true), mk(2.0, 5, 3, false)]),
         [{ time: 0.9, fret: 3, width: 4 }]);
-    // Exact donor beyond the window: the revoiced adjustment still wins
-    // (it is the only signal for that passage).
-    check('anchor donor: no exact donor within the window -> revoiced fallback',
+    // Exact donor beyond the window: the revoiced adjustment wins for the
+    // base band (it is the only signal for that passage) — but the exact,
+    // non-revoiced note far later is still real, uncovered data, so it
+    // seeds its own anchor rather than being silently dropped.
+    check('anchor donor: no exact donor within the window -> revoiced fallback, later note still gets its own anchor',
         remapAnchors([{ time: 0.9, fret: 5, width: 4 }],
             [mk(1.0, 5, 17, true), mk(0.9 + ANCHOR_DONOR_WINDOW_S + 1, 5, 3, false)]),
-        [{ time: 0.9, fret: 17, width: 4 }]);
-    // Untagged donors (direct API use) are trusted as exact — the
-    // pre-refinement behavior, byte-identical.
-    check('anchor donor: untagged donors behave as before',
+        [{ time: 0.9, fret: 17, width: 4 }, { time: 0.9 + ANCHOR_DONOR_WINDOW_S + 1, fret: 3, width: 4 }]);
+    // Untagged donors (direct API use) are trusted as exact for the base
+    // band, same as before — but an untagged note is also eligible as a
+    // split/widen candidate, so a far one still gets its own anchor.
+    check('anchor donor: untagged donors trusted as exact, far untagged note still splits',
         remapAnchors([{ time: 0.9, fret: 5, width: 4 }], [mk(1.0, 5, 17), mk(2.0, 5, 3)]),
-        [{ time: 0.9, fret: 17, width: 4 }]);
+        [{ time: 0.9, fret: 17, width: 4 }, { time: 2.0, fret: 3, width: 4 }]);
 }
 
 // End-to-end through createRetuner: a same-onset bucket whose low D1

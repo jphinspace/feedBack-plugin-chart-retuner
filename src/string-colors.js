@@ -7,19 +7,18 @@ import { parseTargetNote } from './pitch.js';
 import { EXTENDED_DEFAULT_TARGET_TUNING } from './target-tuning.js';
 
 // Role per note in EXTENDED_DEFAULT_TARGET_TUNING, same order. Derived
-// from that array (not a second hardcoded MIDI table) so the two can't
-// drift apart.
+// from that single array rather than a second hardcoded MIDI table,
+// keeping the two permanently in sync.
 const EXTENDED_COLOR_ROLES = ['lowExt2', 'lowExt1', 'lowB', 'e', 'a', 'd', 'g', 'highB', 'highE'];
 const _colorRoleByMidi = new Map(
     EXTENDED_DEFAULT_TARGET_TUNING.map((spec, i) => [parseTargetNote(spec).midi, EXTENDED_COLOR_ROLES[i]])
 );
 
-// Color role for a note produced by CR.defaultExtensionNote — used to
-// pick a default color for a newly added string. 'gray' for anything
-// outside the known chain. Note-based, not position-based, since an
-// added string's only stable identity is its own note (see
-// BEADG_COLOR_ROLES below for the base 5 positions, which ARE
-// position-based).
+// Color role for a note produced by CR.defaultExtensionNote, for a
+// newly added string's default color ('gray' outside the known chain).
+// Note-based rather than position-based, since an added string's only
+// stable identity is its own note (contrast BEADG_COLOR_ROLES below,
+// which IS position-based).
 export function colorRoleForNote(midi) {
     return _colorRoleByMidi.get(midi) || 'gray';
 }
@@ -59,7 +58,7 @@ export function intToHex(n) {
 export const LIGHT_GRAY_COLOR = 0xd3d3d3;
 
 // Fills `colorsIn` out to `length` hex strings, using `defaults[i]`
-// wherever the input entry is missing or not a valid hex.
+// wherever the input entry is missing or an invalid hex.
 export function resolveColorsArray(colorsIn, length, defaults) {
     const out = new Array(length);
     for (let i = 0; i < length; i++) {
