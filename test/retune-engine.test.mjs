@@ -572,6 +572,22 @@ const SPOT_FRETS = [0, 10, 20];
     reduceHandTravel(seedA_B, [0, 5, 10, 15, 20, 25], 24);
     check('reduceHandTravel: a comfortable note stays put despite an unrelated neighbor\'s relocation',
         seedA_B.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 2, f: 5 }, { s: 3, f: 11 }]);
+
+    // Repeated-note run: three notes sharing the identical source
+    // string+fret, back-to-back with nothing else in between (including
+    // a real time gap before the last one, same as a rest in the chart).
+    // Only the first is adjacent to the awkward neighbor at t=0, but the
+    // whole run must relocate together, not just that one hit.
+    const repeatRun = [
+        { t: 0,   s: 0, f: 1, _origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 8, _origNote: { s: 5, f: 5 } },
+        { t: 0.7, s: 1, f: 8, _origNote: { s: 5, f: 5 } },
+        { t: 4.0, s: 1, f: 8, _origNote: { s: 5, f: 5 } },
+    ];
+    reduceHandTravel(repeatRun, [0, 5, 10, 15, 20], 20);
+    check('reduceHandTravel: relocates an entire repeated-note run together, not just its first hit',
+        repeatRun.map(n => ({ s: n.s, f: n.f })),
+        [{ s: 0, f: 1 }, { s: 2, f: 3 }, { s: 2, f: 3 }, { s: 2, f: 3 }]);
 }
 
 // createRetuner() end-to-end: the retune-attributable gate must hold
