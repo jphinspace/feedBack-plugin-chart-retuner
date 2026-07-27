@@ -608,6 +608,50 @@ const SPOT_FRETS = [0, 10, 20];
     check('reduceHandTravel: a same-natural-string jump relocates the later note, not the earlier one',
         sameStringJump.map(n => ({ s: n.s, f: n.f })),
         [{ s: 2, f: 5 }, { s: 1, f: 3 }, { s: 2, f: 3 }, { s: 2, f: 5 }]);
+
+    // A slide's start/end frets are both computed for one target string
+    // (remapSlide) -- relocating just the start note here would strand
+    // the `.sl`/`.slu` endpoint on the string it left. Never eligible,
+    // even across a jump that would otherwise clearly trigger.
+    const slideNote = [
+        { t: 0, s: 0, f: 1 },
+        { t: 0.2, s: 1, f: 8, slu: 10 },
+    ];
+    reduceHandTravel(slideNote, [0, 5, 10, 15, 20], 20);
+    check('reduceHandTravel: a slide note (sl/slu) is never relocated, even across a large jump',
+        slideNote.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 1, f: 8 }]);
+
+    // A slide can't join (or seed) a repeated-note run either -- it stays
+    // untouched while an otherwise-identical, non-slide run member around
+    // it still relocates on its own.
+    const runWithSlide = [
+        { t: 0,   s: 0, f: 1, _origNote: { s: 5, f: 1 } },
+        { t: 0.2, s: 1, f: 8, _origNote: { s: 6, f: 5 } },
+        { t: 0.4, s: 1, f: 8, _origNote: { s: 6, f: 5 }, slu: 10 },
+    ];
+    reduceHandTravel(runWithSlide, [0, 5, 10, 15, 20], 20);
+    check('reduceHandTravel: a slide note does not join a repeated-note run',
+        runWithSlide.map(n => ({ s: n.s, f: n.f })),
+        [{ s: 0, f: 1 }, { s: 2, f: 3 }, { s: 1, f: 8 }]);
+
+    // A double-stop slide (two simultaneous notes, each with its own
+    // sl/slu) is two independent slide notes as far as this function is
+    // concerned -- the isSlide guard protects each one regardless of
+    // which string it's on or that it shares an onset with the other.
+    // isEligible defaults to true here (the worst case): createRetuner
+    // never marks a same-onset pair standalone in the first place (see
+    // its own test below), but this proves the guard holds even if that
+    // routing were ever bypassed.
+    const doubleStopSlide = [
+        { t: 0,   s: 0, f: 1 },
+        { t: 0.2, s: 1, f: 8, slu: 10 },
+        { t: 0.2, s: 2, f: 8, sl: 6 },
+        { t: 0.4, s: 0, f: 1 },
+    ];
+    reduceHandTravel(doubleStopSlide, [0, 5, 10, 15, 20], 20);
+    check('reduceHandTravel: neither member of a double-stop slide is relocated',
+        doubleStopSlide.map(n => ({ s: n.s, f: n.f })),
+        [{ s: 0, f: 1 }, { s: 1, f: 8 }, { s: 2, f: 8 }, { s: 0, f: 1 }]);
 }
 
 // createRetuner() end-to-end: the retune-attributable gate must hold
@@ -648,6 +692,29 @@ const SPOT_FRETS = [0, 10, 20];
         createRetuner().apply(bundle, target, 24, 0);
         check('createRetuner: a differential retune still relocates the note it makes newly awkward',
             bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 1, f: 8 }, { s: 4, f: 13 }]);
+    }
+
+    // A double-stop slide (two simultaneous notes, each carrying its own
+    // sl/slu) shares an onset, so createRetuner's own bucketing routes it
+    // through the group solver rather than the standalone path -- it
+    // never reaches reduceHandTravel at all, regardless of how awkward a
+    // neighboring standalone note would otherwise make it look.
+    {
+        const target = [0, 5, 10, 15, 20];
+        const bundle = {
+            notes: [
+                { t: 0.0, s: 1, f: 3, sl: 5 },
+                { t: 0.0, s: 2, f: 8, slu: 10 },
+                { t: 0.2, s: 0, f: 1 },
+            ],
+            chords: [], anchors: [], chordTemplates: [],
+            tuning: [-23, -23, -13, -23], capo: 0, stringCount: 4,
+        };
+        createRetuner().apply(bundle, target, 24, 0);
+        const doubleStop = bundle.notes.filter(n => n.t === 0.0);
+        check('createRetuner: a double-stop slide keeps both notes, neither hand-travel-relocated',
+            doubleStop.map(n => ({ s: n.s, f: n.f, hasSlide: Number.isInteger(n.sl) || Number.isInteger(n.slu), relocated: n._natS !== undefined })),
+            [{ s: 2, f: 3, hasSlide: true, relocated: false }, { s: 3, f: 6, hasSlide: true, relocated: false }]);
     }
 }
 

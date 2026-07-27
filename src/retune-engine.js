@@ -340,6 +340,11 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
     // neighbor would move, leaving its own repeats on a different fret.
     const sameOrigin = (a, b) => a._origNote && b._origNote
         && a._origNote.s === b._origNote.s && a._origNote.f === b._origNote.f;
+    // A slide's start and end fret are both computed for the SAME target
+    // string (remapSlide); relocating just the start note here would
+    // leave its `.sl`/`.slu` endpoint stranded on the string it left.
+    const isSlide = (note) => (Number.isInteger(note.sl) && note.sl >= 0)
+        || (Number.isInteger(note.slu) && note.slu >= 0);
 
     for (let pass = 0; pass < HAND_TRAVEL_MAX_PASSES; pass++) {
         let changed = false;
@@ -351,9 +356,9 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
             // against its NEW position instead of its natural one,
             // letting it drift string to string pass after pass instead
             // of ever converging.
-            if (n.f <= 0 || !isEligible(n) || n._natS !== undefined) { i++; continue; }
+            if (n.f <= 0 || !isEligible(n) || n._natS !== undefined || isSlide(n)) { i++; continue; }
             let end = i + 1;
-            while (end < notes.length && isEligible(notes[end]) && notes[end].f > 0 && sameOrigin(notes[end], n)) end++;
+            while (end < notes.length && isEligible(notes[end]) && notes[end].f > 0 && !isSlide(notes[end]) && sameOrigin(notes[end], n)) end++;
             const runStart = notes[i], runEnd = notes[end - 1];
             const prev = i > 0 ? notes[i - 1] : null;
             const next = end < notes.length ? notes[end] : null;

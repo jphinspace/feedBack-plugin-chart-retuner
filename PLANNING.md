@@ -44,10 +44,6 @@ Playability:
 - `HAND_JUMP_FRET_THRESHOLD`/`HAND_JUMP_MIN_IMPROVEMENT` are flat
   constants, not scaled per instrument — a 5-fret stretch means something
   very different on a short-scale ukulele than a full-scale bass.
-- Notes carrying `.sl`/`.slu` (slides) aren't excluded from hand-travel
-  relocation eligibility. Relocating a slide's start note to a different
-  string independent of its endpoint would be wrong; nothing currently
-  guards against it.
 
 Legibility:
 - Anchor width currently floors at the source chart's original authored width, but nothing checks whether that width
