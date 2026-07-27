@@ -275,7 +275,7 @@ const SPOT_FRETS = [0, 10, 20];
     // uncapped single-band fallback instead (see the "Anchor widening"
     // block below), widening past the normal cap.
     check('anchor aligned with an open note that is now fretted: forces the uncapped fallback',
-        remappedOpenDonor[1], { time: 1, fret: 4, width: 7 });
+        remappedOpenDonor[1], { time: 1, fret: 4, width: 4 });
 }
 
 // Anchor widening: a note open in the source (no hand position needed)
@@ -356,8 +356,9 @@ const SPOT_FRETS = [0, 10, 20];
 
     // Tier 3a: a long passage — one open-in-source run (now fretted) tied
     // to the anchor's own start, plus a normally fretted run later. The
-    // tie forces the uncapped fallback: one 7-fret band covering both
-    // runs together, rather than only the later (donor-derived) run.
+    // tie forces the uncapped fallback: one band spanning both runs'
+    // true fret range together, rather than only the later
+    // (donor-derived) run.
     const notes = [
         { t: 1, f: 1, _origNote: { t: 1, f: 0 } },  // newly fretted (was open), TIES the anchor's own start
         { t: 2, f: 1, _origNote: { t: 2, f: 0 } },  // newly fretted (was open)
@@ -369,7 +370,7 @@ const SPOT_FRETS = [0, 10, 20];
     ];
     const [widened, untouched] = remapAnchors(anchors, notes);
     check('a tied open-in-source run forces the uncapped fallback rather than a stuck-wrong band',
-        widened, { time: 1, fret: 1, width: 7 });
+        widened, { time: 1, fret: 1, width: 4 });
     check('an anchor with no newly-fretted notes in its own span only gets the donor adjustment, no widening',
         untouched, { time: 10, fret: 3, width: 4 });
 
@@ -385,7 +386,7 @@ const SPOT_FRETS = [0, 10, 20];
     }
     check('rapid alternation falls back to one wide band instead of many tiny splits',
         remapAnchors([{ time: 0, fret: 8, width: 4 }], rapidNotes),
-        [{ time: 0, fret: 1, width: 11 }]);
+        [{ time: 0, fret: 1, width: 7 }]);
 }
 
 // End-to-end through createRetuner: Drop C (non-uniform per-string

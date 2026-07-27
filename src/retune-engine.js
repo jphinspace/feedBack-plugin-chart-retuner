@@ -264,16 +264,27 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET)
             for (const seg of segments) out.push(seg);
         } else {
             // Rapid alternation: one uncapped band spanning the whole
-            // chart anchor, widened across every target-fretted note in
-            // it — reads better than a flicker of tiny ones.
-            let fbFret = baseFret, fbWidth = a.width;
+            // chart anchor, sized to the true min/max fret across every
+            // target-fretted note in it — reads better than a flicker
+            // of tiny ones. The donor's own base fret is only a
+            // fallback for the (unreachable in practice) case of no
+            // target-fretted notes in the span at all — it must not
+            // pad the real range, since the donor can come from well
+            // outside this anchor's own span when nothing local has a
+            // fretted source note to borrow from.
+            let fbMin = null, fbMax = null;
             let p = cPtrStart;
             for (; p < targetFretted.length && targetFretted[p].t < hardEnd; p++) {
                 const nf = targetFretted[p].f;
-                if (nf < fbFret) { fbWidth += fbFret - nf; fbFret = nf; }
-                else if (nf > fbFret + fbWidth) { fbWidth = nf - fbFret; }
+                if (fbMin === null || nf < fbMin) fbMin = nf;
+                if (fbMax === null || nf > fbMax) fbMax = nf;
             }
-            out.push({ time: a.time, fret: fbFret, width: fbWidth });
+            if (fbMin === null) { fbMin = baseFret; fbMax = baseFret; }
+            // An anchor is a hand-position indicator (one finger per
+            // fret), not a note tracker, so the band never shrinks
+            // below the chart's own authored width even when every
+            // real note in a long span lands on one fret.
+            out.push({ time: a.time, fret: fbMin, width: Math.max(fbMax - fbMin, a.width) });
             cPtr = p;
         }
     }
@@ -289,6 +300,15 @@ export const HAND_JUMP_TIME_WINDOW_S = 0.75;
 // An alternate placement must beat the natural one by at least this many
 // frets to be worth relocating to — rejects marginal, barely-better swaps.
 export const HAND_JUMP_MIN_IMPROVEMENT = 2;
+
+// Bounds how many times reduceHandTravel re-sweeps the note array. A
+// note decided early in one sweep can only see a later neighbor's
+// PRE-relocation position, since that neighbor's own turn hasn't come
+// up yet — so an earlier note that stayed put may need another sweep to
+// react once the later neighbor has actually settled. Real charts
+// converge in a couple of passes; this caps the cost of the rare chart
+// that doesn't settle cleanly.
+const HAND_TRAVEL_MAX_PASSES = 4;
 
 // Relocates a note (or a whole repeated-note run, together) reached via
 // a fast, large cross-string jump to an exact-pitch alternate on an
@@ -321,57 +341,69 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
     const sameOrigin = (a, b) => a._origNote && b._origNote
         && a._origNote.s === b._origNote.s && a._origNote.f === b._origNote.f;
 
-    let i = 0;
-    while (i < notes.length) {
-        const n = notes[i];
-        if (n.f <= 0 || !isEligible(n)) { i++; continue; }
-        let end = i + 1;
-        while (end < notes.length && isEligible(notes[end]) && notes[end].f > 0 && sameOrigin(notes[end], n)) end++;
-        const runStart = notes[i], runEnd = notes[end - 1];
-        const prev = i > 0 ? notes[i - 1] : null;
-        const next = end < notes.length ? notes[end] : null;
+    for (let pass = 0; pass < HAND_TRAVEL_MAX_PASSES; pass++) {
+        let changed = false;
+        let i = 0;
+        while (i < notes.length) {
+            const n = notes[i];
+            // A note that already relocated (in an earlier pass) is
+            // settled -- re-evaluating it here would score candidates
+            // against its NEW position instead of its natural one,
+            // letting it drift string to string pass after pass instead
+            // of ever converging.
+            if (n.f <= 0 || !isEligible(n) || n._natS !== undefined) { i++; continue; }
+            let end = i + 1;
+            while (end < notes.length && isEligible(notes[end]) && notes[end].f > 0 && sameOrigin(notes[end], n)) end++;
+            const runStart = notes[i], runEnd = notes[end - 1];
+            const prev = i > 0 ? notes[i - 1] : null;
+            const next = end < notes.length ? notes[end] : null;
 
-        const prevGap = (prev && natS(prev) !== n.s && near(prev.t, runStart.t)) ? Math.abs(n.f - natF(prev)) : -1;
-        const nextGap = (next && natS(next) !== n.s && near(runEnd.t, next.t)) ? Math.abs(n.f - natF(next)) : -1;
-        const triggerGap = Math.max(
-            (prevGap >= 0 && !notWorsenedBySource(prev, n, prevGap)) ? prevGap : -1,
-            (nextGap >= 0 && !notWorsenedBySource(n, next, nextGap)) ? nextGap : -1,
-        );
-        if (triggerGap < HAND_JUMP_FRET_THRESHOLD) { i = end; continue; }
+            const prevGap = (prev && natS(prev) !== n.s && near(prev.t, runStart.t)) ? Math.abs(n.f - natF(prev)) : -1;
+            const nextGap = (next && natS(next) !== n.s && near(runEnd.t, next.t)) ? Math.abs(n.f - natF(next)) : -1;
+            const triggerGap = Math.max(
+                (prevGap >= 0 && !notWorsenedBySource(prev, n, prevGap)) ? prevGap : -1,
+                (nextGap >= 0 && !notWorsenedBySource(n, next, nextGap)) ? nextGap : -1,
+            );
+            if (triggerGap < HAND_JUMP_FRET_THRESHOLD) { i = end; continue; }
 
-        // Live positions here, unlike the trigger check above — scoring
-        // targets the real final arrangement the player will see.
-        const score = (f) => Math.max(
-            (prev && near(prev.t, runStart.t)) ? Math.abs(f - prev.f) : -1,
-            (next && near(runEnd.t, next.t)) ? Math.abs(f - next.f) : -1,
-        );
-        const naturalScore = score(n.f);
+            // Live positions here, unlike the trigger check above —
+            // scoring targets the real final arrangement the player will
+            // see, including a later neighbor's own settled relocation
+            // from an earlier pass.
+            const score = (f) => Math.max(
+                (prev && near(prev.t, runStart.t)) ? Math.abs(f - prev.f) : -1,
+                (next && near(runEnd.t, next.t)) ? Math.abs(f - next.f) : -1,
+            );
+            const naturalScore = score(n.f);
 
-        const pitch = target[n.s] + n.f;
-        let best = null;
-        for (const altS of [n.s - 1, n.s + 1]) {
-            if (altS < 0 || altS >= target.length) continue;
-            const altF = pitch - target[altS];
-            if (altF < 0 || altF > maxFret) continue;
-            let collides = false;
-            for (let k = i; k < end && !collides; k++) {
-                const rn = notes[k];
-                collides = notes.some(o => o !== rn && o.t === rn.t && o.s === altS);
+            const pitch = target[n.s] + n.f;
+            let best = null;
+            for (const altS of [n.s - 1, n.s + 1]) {
+                if (altS < 0 || altS >= target.length) continue;
+                const altF = pitch - target[altS];
+                if (altF < 0 || altF > maxFret) continue;
+                let collides = false;
+                for (let k = i; k < end && !collides; k++) {
+                    const rn = notes[k];
+                    collides = notes.some(o => o !== rn && o.t === rn.t && o.s === altS);
+                }
+                if (collides) continue;
+                const altScore = score(altF);
+                if (best === null || altScore < best.score) best = { s: altS, f: altF, score: altScore };
             }
-            if (collides) continue;
-            const altScore = score(altF);
-            if (best === null || altScore < best.score) best = { s: altS, f: altF, score: altScore };
-        }
-        if (best && best.score <= naturalScore - HAND_JUMP_MIN_IMPROVEMENT) {
-            for (let k = i; k < end; k++) {
-                const rn = notes[k];
-                rn._natS = rn.s;
-                rn._natF = rn.f;
-                rn.s = best.s;
-                rn.f = best.f;
+            if (best && best.score <= naturalScore - HAND_JUMP_MIN_IMPROVEMENT) {
+                for (let k = i; k < end; k++) {
+                    const rn = notes[k];
+                    rn._natS = rn.s;
+                    rn._natF = rn.f;
+                    rn.s = best.s;
+                    rn.f = best.f;
+                }
+                changed = true;
             }
+            i = end;
         }
-        i = end;
+        if (!changed) break;
     }
 }
 
