@@ -181,6 +181,16 @@ export const ANCHOR_DONOR_WINDOW_S = 2;
 // own) by borrowing the adjustment of the nearest already-remapped note
 // at/after the anchor's time. Open-string notes are skipped as donors;
 // both arrays must be time-sorted.
+// Above this many honestly-sized segments, a chart anchor's span isn't
+// "one clean transition" (Bon Jovi "It's My Life": fret 8 settles, then
+// fret 1 settles — one split, easy to read) — it's a fast, repeating
+// alternation (Alestorm "Drink": source open/fretted flipping every
+// ~0.3-0.5s for ~17s straight). Splitting THAT would produce dozens of
+// flickering micro-anchors, worse than either the pre-split behavior or
+// one wide band, so past this limit the split attempt is discarded in
+// favor of a single band spanning the whole chart anchor.
+const ANCHOR_MAX_SPLITS = 2;
+
 export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET) {
     if (!Array.isArray(anchors) || anchors.length === 0) return anchors || [];
     if (!Array.isArray(remappedNotes) || remappedNotes.length === 0) return anchors.slice();
@@ -193,6 +203,7 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET)
     let nfPtr = 0;
     for (let i = 0; i < anchors.length; i++) {
         const a = anchors[i];
+        const hardEnd = i + 1 < anchors.length ? anchors[i + 1].time : Infinity;
         while (ptr < donors.length - 1 && donors[ptr].t < a.time) ptr++;
         let note = donors[ptr];
         // Prefer an exact per-note donor over a revoiced one within
@@ -208,20 +219,82 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET)
         // relocation must never leak into the anchor's shift.
         const natF = note._natF !== undefined ? note._natF : note.f;
         const adjustment = natF - note._origNote.f;
-        let fret = Math.max(0, Math.min(maxFret, a.fret + adjustment));
+        const baseFret = Math.max(0, Math.min(maxFret, a.fret + adjustment));
+        let fret = baseFret;
         let width = a.width;
+        let startTime = a.time;
+        const nfPtrStart = nfPtr;
+        const segments = [];
 
         // Widen (never shrink) the band to also cover a note that was
         // open in the source but is newly fretted here — the source
         // chart's anchors were never authored to give it a hand position.
-        const spanEnd = i + 1 < anchors.length ? anchors[i + 1].time : Infinity;
-        while (nfPtr < newlyFretted.length && newlyFretted[nfPtr].t < a.time) nfPtr++;
-        for (let k = nfPtr; k < newlyFretted.length && newlyFretted[k].t < spanEnd; k++) {
-            const nf = newlyFretted[k].f;
-            if (nf < fret) { width += fret - nf; fret = nf; }
-            else if (nf > fret + width) { width = nf - fret; }
+        // Two bounds, both about what "one hand position" can honestly
+        // mean: only look ANCHOR_DONOR_WINDOW_S past the current band's
+        // own start (a note several seconds later isn't part of THIS
+        // moment regardless of its fret), and never stretch past
+        // HAND_JUMP_FRET_THRESHOLD frets (a comfortable single-position
+        // span) even for a note that IS nearby in time — a retune with
+        // non-uniform per-string offsets can stretch a passage that was
+        // compact on the source instrument apart on the target one, no
+        // matter how close together in time it still plays. A note past
+        // either bound isn't dropped, though: it seeds a brand-new
+        // anchor of its own (at its own natural fret, the chart's own
+        // width) — so the highway shows the real position change instead
+        // of covering nothing, or covering the wrong span — and that new
+        // anchor repeats the same widen-then-split process in turn, so
+        // one chart anchor can expand into several honestly-sized ones
+        // (capped at ANCHOR_MAX_SPLITS — see its own comment).
+        let tiedOrphan = false;
+        for (;;) {
+            const widthCap = Math.max(width, HAND_JUMP_FRET_THRESHOLD);
+            const spanEnd = Math.min(hardEnd, startTime + ANCHOR_DONOR_WINDOW_S);
+            while (nfPtr < newlyFretted.length && newlyFretted[nfPtr].t < startTime) nfPtr++;
+            while (nfPtr < newlyFretted.length && newlyFretted[nfPtr].t < spanEnd) {
+                const nf = newlyFretted[nfPtr].f;
+                if (nf < fret) {
+                    if (width + (fret - nf) > widthCap) break;
+                    width += fret - nf; fret = nf;
+                } else if (nf > fret + width) {
+                    if (nf - fret > widthCap) break;
+                    width = nf - fret;
+                }
+                nfPtr++;
+            }
+            segments.push({ time: startTime, fret, width });
+            if (segments.length > ANCHOR_MAX_SPLITS) break;
+            const orphan = nfPtr < newlyFretted.length ? newlyFretted[nfPtr] : null;
+            if (!orphan || !(orphan.t < hardEnd)) break;
+            // A candidate at/before the CURRENT band's own start can't
+            // become a NEXT split (two anchors can't share one timestamp)
+            // — but it's still proof the donor-derived band is wrong
+            // right from this anchor's very first moment, so it forces
+            // the same "rapid alternation" fallback below rather than
+            // silently keeping a band that's wrong from the start.
+            if (!(orphan.t > startTime)) { tiedOrphan = true; break; }
+            startTime = orphan.t;
+            fret = Math.max(0, Math.min(maxFret, orphan.f));
+            width = a.width;
         }
-        out.push({ time: a.time, fret, width });
+
+        if (segments.length <= ANCHOR_MAX_SPLITS && !tiedOrphan) {
+            for (const seg of segments) out.push(seg);
+        } else {
+            // Rapid alternation: fall back to one band spanning the
+            // whole chart anchor, widened (uncapped) across every
+            // newly-fretted note in it — the same shape this function
+            // used before splitting existed, since a wide-but-honest
+            // single anchor reads better here than a flicker of tiny ones.
+            let fbFret = baseFret, fbWidth = a.width;
+            let p = nfPtrStart;
+            for (; p < newlyFretted.length && newlyFretted[p].t < hardEnd; p++) {
+                const nf = newlyFretted[p].f;
+                if (nf < fbFret) { fbWidth += fbFret - nf; fbFret = nf; }
+                else if (nf > fbFret + fbWidth) { fbWidth = nf - fbFret; }
+            }
+            out.push({ time: a.time, fret: fbFret, width: fbWidth });
+            nfPtr = p;
+        }
     }
     return out;
 }

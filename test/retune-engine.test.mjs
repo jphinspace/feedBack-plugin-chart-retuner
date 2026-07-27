@@ -270,55 +270,152 @@ const SPOT_FRETS = [0, 10, 20];
     ];
     const remappedOpenDonor = remapAnchors(openDonorAnchors, openDonorNotes);
     check('anchor before open-string note uses fretted-note adjustment', remappedOpenDonor[0], { time: 0, fret: 2, width: 4 });
-    // The open note (t=1) is still skipped as the ADJUSTMENT donor (base
-    // band comes from the next fretted donor, fret 7) — but it now needs
-    // its own hand position in the target (fret 4), so the band widens
-    // down to include it rather than leaving it uncovered.
-    check('anchor aligned with an open note that is now fretted: donor-skip picks the base band, widening covers the note itself',
+    // The open note (t=1) ties the anchor's own start time, so it can't
+    // become a separate split (two anchors can't share one timestamp) —
+    // it instead forces the uncapped single-band fallback (see the
+    // "Anchor widening" block below), widening past the normal cap.
+    check('anchor aligned with an open note that is now fretted: forces the uncapped fallback',
         remappedOpenDonor[1], { time: 1, fret: 4, width: 7 });
 }
 
 // Anchor widening: a note open in the source (no hand position needed)
 // that lands on a nonzero target fret after retuning DOES need one, and
-// the source chart's own anchors were never authored to cover it — this
-// is the exact shape of a real chart bug (Alestorm "Drink", Bass, an
-// ~11s passage of open strings retuned onto BEADG landing on fret 1
-// while its covering anchor's donor-derived band started at fret 3).
+// the source chart's own anchors were never authored to cover it. Three
+// tiers, in order of preference:
+//  1. Modest widening (within HAND_JUMP_FRET_THRESHOLD, ANCHOR_DONOR_
+//     WINDOW_S) — the band stretches a little, still one hand position.
+//  2. A clean split: a note past either bound seeds a brand-new anchor
+//     of its own instead of being left uncovered (Bon Jovi "It's My
+//     Life", Bass: a comfortable fret-8 run, then — seconds later, no
+//     jump involved at all — a comfortable fret-1 run; a retune with
+//     non-uniform per-string offsets, Drop C -> BEADG here, stretched a
+//     passage that was compact on the source instrument apart on the
+//     target one).
+//  3. Falling back to ONE band spanning the whole chart anchor, widened
+//     without a cap: used when a clean split isn't possible — either
+//     because it would take more than ANCHOR_MAX_SPLITS (a fast,
+//     repeating alternation would otherwise flicker through dozens of
+//     tiny anchors — Alestorm "Drink", Bass: source open/fretted flip
+//     every ~0.3-0.5s for ~17s), or because the very first candidate
+//     ties the anchor's own start time (openDonorAnchors above) and so
+//     can't become a split at all. A wide-but-honest single anchor reads
+//     better than either a flicker or a band that's wrong from the start.
 {
-    // A long passage: one open-in-source run (now fretted) plus a normally
-    // fretted run, both covered by a single anchor spanning to the next one.
-    const notes = [
-        { t: 1, f: 1, _origNote: { t: 1, f: 0 } },  // newly fretted (was open)
-        { t: 2, f: 1, _origNote: { t: 2, f: 0 } },  // newly fretted (was open)
-        { t: 3, f: 4, _origNote: { t: 3, f: 3 } },  // normally fretted, sets the base band
-    ];
-    const anchors = [
-        { time: 1, fret: 3, width: 4 }, // donor adjustment +1 -> base band [4,8]
-        { time: 10, fret: 2, width: 4 }, // same donor, same +1, no notes in its own span
-    ];
-    const [widened, untouched] = remapAnchors(anchors, notes);
-    check('widening lowers fret to cover the newly-fretted notes without discarding the original top edge',
-        widened, { time: 1, fret: 1, width: 7 });
-    check('an anchor with no newly-fretted notes in its own span only gets the donor adjustment, no widening',
-        untouched, { time: 10, fret: 3, width: 4 });
+    // Tier 1: modest widening (within the cap) still works in both
+    // directions.
+    check('widening lowers the fret to cover a nearby newly-fretted note',
+        remapAnchors([{ time: 1, fret: 4, width: 4 }], [
+            { t: 1, f: 3, _origNote: { t: 1, f: 0 } },  // newly fretted, 1 fret below
+            { t: 2, f: 6, _origNote: { t: 2, f: 6 } },  // fretted donor, adjustment 0
+        ]),
+        [{ time: 1, fret: 3, width: 5 }]);
+    check('widening raises the width to cover a nearby newly-fretted note above the base band',
+        remapAnchors([{ time: 1, fret: 2, width: 4 }], [
+            { t: 1, f: 2, _origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
+            { t: 2, f: 7, _origNote: { t: 2, f: 0 } },  // newly fretted, 1 fret above
+        ]),
+        [{ time: 1, fret: 2, width: 5 }]);
 
-    // Widening also raises the top edge when the newly-fretted note sits
-    // above the base band, and never widens using a note outside the
-    // anchor's own span (that belongs to the next anchor instead).
+    // Tier 2: a note past the cap or the time window seeds a clean split
+    // instead of being left uncovered (both directions), as long as it's
+    // strictly later than the current band's own start.
+    check('excessive widening downward seeds a new anchor instead of stretching',
+        remapAnchors([{ time: 1, fret: 4, width: 4 }], [
+            { t: 1, f: 4, _origNote: { t: 1, f: 4 } },  // fretted donor, adjustment 0
+            { t: 2, f: 1, _origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
+        ]),
+        [{ time: 1, fret: 4, width: 4 }, { time: 2, fret: 1, width: 4 }]);
+    check('excessive widening upward seeds a new anchor instead of stretching',
+        remapAnchors([{ time: 1, fret: 2, width: 4 }], [
+            { t: 1, f: 2, _origNote: { t: 1, f: 2 } },
+            { t: 2, f: 9, _origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
+        ]),
+        [{ time: 1, fret: 2, width: 4 }, { time: 2, fret: 9, width: 4 }]);
+    const donorWindow = CR.ANCHOR_DONOR_WINDOW_S;
+    check('a newly-fretted note past ANCHOR_DONOR_WINDOW_S also seeds a split, even when fret-close',
+        remapAnchors([{ time: 0, fret: 5, width: 4 }], [
+            { t: 0, f: 5, _origNote: { t: 0, f: 5 } },
+            { t: donorWindow + 1, f: 4, _origNote: { t: donorWindow + 1, f: 0 } },
+        ]),
+        [{ time: 0, fret: 5, width: 4 }, { time: donorWindow + 1, fret: 4, width: 4 }]);
+
+    // Widening (and splitting) never uses a note outside the anchor's own
+    // span (that belongs to the next anchor instead).
     const risingNotes = [
-        { t: 1, f: 2, _origNote: { t: 1, f: 2 } },   // fretted donor: base band [2,6]
-        { t: 2, f: 9, _origNote: { t: 2, f: 0 } },   // newly fretted, above the base band
-        { t: 6, f: 12, _origNote: { t: 6, f: 0 } },  // newly fretted, but belongs to the NEXT anchor's span
+        { t: 1, f: 2, _origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
+        { t: 6, f: 7, _origNote: { t: 6, f: 0 } },  // newly fretted, but belongs to the NEXT anchor's span
     ];
     const risingAnchors = [
         { time: 1, fret: 2, width: 4 },
         { time: 5, fret: 2, width: 4 },
     ];
     const [risingWidened, risingNext] = remapAnchors(risingAnchors, risingNotes);
-    check('widening raises width to cover a newly-fretted note above the base band',
-        risingWidened, { time: 1, fret: 2, width: 7 });
-    check('a newly-fretted note past the next anchor\'s time widens that anchor, not this one',
-        risingNext, { time: 5, fret: 2, width: 10 });
+    check('a note outside this anchor\'s span is not used to widen or split it',
+        risingWidened, { time: 1, fret: 2, width: 4 });
+    check('...it widens the anchor whose span it actually falls in instead',
+        risingNext, { time: 5, fret: 2, width: 5 });
+
+    // Tier 3a: a long passage — one open-in-source run (now fretted) tied
+    // to the anchor's own start, plus a normally fretted run later — is
+    // the exact shape of the real Alestorm "Drink" bug. The tie forces
+    // the uncapped fallback: one 7-fret band covering both runs, not a
+    // band stuck on the later (donor-derived) run alone.
+    const notes = [
+        { t: 1, f: 1, _origNote: { t: 1, f: 0 } },  // newly fretted (was open), TIES the anchor's own start
+        { t: 2, f: 1, _origNote: { t: 2, f: 0 } },  // newly fretted (was open)
+        { t: 3, f: 4, _origNote: { t: 3, f: 3 } },  // normally fretted, donor for the base band
+    ];
+    const anchors = [
+        { time: 1, fret: 3, width: 4 }, // donor adjustment +1 -> base band [4,8]
+        { time: 10, fret: 2, width: 4 }, // same donor, same +1, no notes in its own span
+    ];
+    const [widened, untouched] = remapAnchors(anchors, notes);
+    check('a tied open-in-source run forces the uncapped fallback rather than a stuck-wrong band',
+        widened, { time: 1, fret: 1, width: 7 });
+    check('an anchor with no newly-fretted notes in its own span only gets the donor adjustment, no widening',
+        untouched, { time: 10, fret: 3, width: 4 });
+
+    // Tier 3b: a fast, repeating alternation (source open/fretted flipping
+    // every 0.2s) would otherwise produce far more than ANCHOR_MAX_SPLITS
+    // splits — falls back to one wide band instead of flickering through
+    // a dozen tiny anchors, the same shape as the rest of the real
+    // Alestorm "Drink" passage.
+    const rapidNotes = [];
+    for (let i = 0; i < 10; i++) {
+        rapidNotes.push({ t: i * 0.4, f: 5, _origNote: { t: i * 0.4, f: 5 } });
+        rapidNotes.push({ t: i * 0.4 + 0.2, f: 1, _origNote: { t: i * 0.4 + 0.2, f: 0 } });
+    }
+    check('rapid alternation falls back to one wide band instead of many tiny splits',
+        remapAnchors([{ time: 0, fret: 5, width: 4 }], rapidNotes),
+        [{ time: 0, fret: 1, width: 8 }]);
+}
+
+// End-to-end through createRetuner: the Bon Jovi "It's My Life" shape --
+// Drop C (non-uniform per-string offsets) onto BEADG. A comfortable
+// fret-8 run right at the anchor must split cleanly into its own anchor
+// once the notes actually move to fret 1, seconds later — not get
+// dragged into a 9-fret span, and not get stuck showing fret 6 for a
+// passage that's actually at fret 1.
+{
+    const { createRetuner, resolveTargetTuning, BUILTIN_PRESET_TUNINGS } = CR;
+    const beadg = BUILTIN_PRESET_TUNINGS.find(p => p.id === 'beadg');
+    const { midiTuning: beadgTarget } = resolveTargetTuning(beadg.strings);
+    const bundle = {
+        notes: [
+            { t: 12.0, s: 1, f: 5 },
+            { t: 12.5, s: 1, f: 5 },
+            { t: 15.75, s: 0, f: 0 },
+        ],
+        chords: [], anchors: [{ time: 12.0, fret: 3, width: 4 }, { time: 16.0, fret: 3, width: 4 }], chordTemplates: [],
+        tuning: [-4, -2, -2, -2], capo: 0, stringCount: 4,
+    };
+    createRetuner().apply(bundle, beadgTarget, beadg.maxFret, 0);
+    check('createRetuner: Drop C -> BEADG splits cleanly instead of stretching or sticking',
+        bundle.anchors, [
+            { time: 12, fret: 6, width: 4 },
+            { time: 15.75, fret: 1, width: 4 },
+            { time: 16, fret: 6, width: 4 },
+        ]);
 }
 
 // reduceHandTravel: relocates a note reached via a large, fast cross-string
