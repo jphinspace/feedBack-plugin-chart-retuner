@@ -35,8 +35,8 @@ Playability:
 - The scoring metric is raw fret-distance only, blind to string distance —
   a same-fret-number alternate on a string away from where the hand
   actually is can score as "comfortable" when it requires a bigger
-  movement than staying put. Worked around for one shape this session
-  (prevGap/nextGap asymmetry); likely not the only shape it affects.
+  movement than staying put. The prevGap/nextGap asymmetry works around
+  one shape of this; likely not the only shape it affects.
 - Chord-grouped notes are entirely exempt from hand-travel reduction
   ("already have a deliberate voicing"), so a chord's voicing and the
   standalone notes immediately around it are never reconciled against
@@ -50,11 +50,9 @@ Playability:
   guards against it.
 
 Legibility:
-- Anchor width floors at the source chart's own authored width (the
-  right default, per this session's "hand-position indicator, not a
-  note tracker" finding) — but nothing checks whether that authored
-  width is still a sane assumption once a differential per-string retune
-  has actually changed which frets are in play.
+- Anchor width currently floors at the source chart's original authored width, but nothing checks whether that width
+  is still a sane assumption once a differential per-string retune has
+  actually changed which frets are in play.
 - `ANCHOR_MAX_SPLITS`/`ANCHOR_DONOR_WINDOW_S` are flat constants too, not
   scaled per instrument or informed by phrase/section structure — the
   "rapid alternation" fallback has no concept of a musical phrase
@@ -62,10 +60,10 @@ Legibility:
   read as two distinct passages.
 - Repeated-note consistency (same source string+fret -> same target
   fret) is only guaranteed for a literally consecutive run with nothing
-  else in between (fixed this session). The same riff reused later in
-  the song — a chorus repeating a verse's line, for instance — is
-  remapped independently each time and isn't guaranteed to land on the
-  same frets, since each occurrence's surrounding context can differ.
+  else in between. The same riff reused later in the song — a chorus
+  repeating a verse's line, for instance — is remapped independently
+  each time and isn't guaranteed to land on the same frets, since each
+  occurrence's surrounding context can differ.
 
 ### 2. Per-preset chord stretch allowance
 
