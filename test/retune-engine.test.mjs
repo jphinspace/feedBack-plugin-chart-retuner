@@ -1083,6 +1083,28 @@ const SPOT_FRETS = [0, 10, 20];
         bundle.notes.map(n => n.f), [2, 0, 4]);
 }
 
+// displayFretOffset: sl/slu are always-present fields on a raw note, not
+// omitted when there's no slide — a plain (non-sliding) note carries them as
+// -1, the same "not applicable" sentinel remapNoteEntry's own hasSl/hasSlu
+// checks already treat as "no slide" (feedBack chart-retuner: shifting -1
+// unconditionally fabricated a positive slide destination on every single
+// note, which the highway then drew as a slide arrow on notes that were
+// never sliding — regression coverage for that bug).
+{
+    const { createRetuner } = CR;
+    const capo = 5;
+    const effective = [40 + capo];
+    const relCeiling = 20 - capo;
+    const bundle = {
+        notes: [{ t: 0, s: 0, f: 5, sl: -1, slu: -1 }], chords: [], anchors: [], chordTemplates: [],
+        tuning: [0], capo: 0, stringCount: 1,
+    };
+    createRetuner().apply(bundle, effective, relCeiling, capo);
+    check('displayFretOffset: a plain note\'s -1 sl/slu sentinel is untouched, not shifted into a fake slide',
+        { f: bundle.notes[0].f, sl: bundle.notes[0].sl, slu: bundle.notes[0].slu },
+        { f: 5, sl: -1, slu: -1 });
+}
+
 // displayFretOffset across chords and templates: template frets shift
 // except the -1 "unused string" sentinel (0/open is NOT preserved — see the
 // block above), fingers untouched, and chord instances follow their

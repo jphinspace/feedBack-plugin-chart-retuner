@@ -14,6 +14,23 @@ import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES }
 
 const _clampFret = (f, maxFret) => Math.max(0, Math.min(maxFret, f));
 
+// A fret-shaped field's "not applicable" sentinel — a slide-less note's own
+// sl/slu, or an unused string slot in a chord template's frets array —
+// isn't a literal value this file checks for; it's defined by what a REAL
+// fret looks like (a non-negative integer). Anything else, whatever an
+// upstream chart format uses for "not applicable" today or in the future,
+// reads as not-applicable without this file hardcoding that value anywhere.
+const _isRealFret = (v) => Number.isInteger(v) && v >= 0;
+
+// A note's real slide destination and which field it's carried in — sl
+// takes precedence when a note somehow has both, matching every one of
+// this file's slide checks. Null when the note isn't sliding at all.
+function _slideTarget(note) {
+    if (_isRealFret(note.sl)) return { field: 'sl', to: note.sl };
+    if (_isRealFret(note.slu)) return { field: 'slu', to: note.slu };
+    return null;
+}
+
 // ---- Pathological-chart safety valves (createRetuner) ----------------
 // Keeps one remap fast enough to never stall the render thread. Three
 // bounds, chord-solver.js's MAX_SEARCH_NODES plus the two below, all
@@ -127,14 +144,12 @@ export function noteHalfstepRank(sourceOpenMidi, fret) {
 
 // Dispatches to remapSlide when the note carries sl/slu, else remapNote.
 export function remapNoteEntry(sourceOpenMidi, naturalTargetString, note, targetMidiTuning, maxFret = DEFAULT_MAX_FRET) {
-    const hasSl = Number.isInteger(note.sl) && note.sl >= 0;
-    const hasSlu = !hasSl && Number.isInteger(note.slu) && note.slu >= 0;
-    if (hasSl || hasSlu) {
-        const dest = hasSl ? note.sl : note.slu;
-        const r = remapSlide(sourceOpenMidi, naturalTargetString, note.f, dest, targetMidiTuning, maxFret);
+    const slide = _slideTarget(note);
+    if (slide) {
+        const r = remapSlide(sourceOpenMidi, naturalTargetString, note.f, slide.to, targetMidiTuning, maxFret);
         if (!r) return null;
         const out = { s: r.s, f: r.f };
-        if (hasSl) out.sl = r.slideTo; else out.slu = r.slideTo;
+        out[slide.field] = r.slideTo;
         return out;
     }
     return remapNote(sourceOpenMidi, naturalTargetString, note.f, targetMidiTuning, maxFret);
@@ -343,8 +358,7 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
     // A slide's start and end fret are both computed for the SAME target
     // string (remapSlide); relocating just the start note here would
     // leave its `.sl`/`.slu` endpoint stranded on the string it left.
-    const isSlide = (note) => (Number.isInteger(note.sl) && note.sl >= 0)
-        || (Number.isInteger(note.slu) && note.slu >= 0);
+    const isSlide = (note) => _slideTarget(note) !== null;
 
     for (let pass = 0; pass < HAND_TRAVEL_MAX_PASSES; pass++) {
         let changed = false;
@@ -430,7 +444,7 @@ export function remapChordTemplate(sourceOpenMidiByString, naturalTargetByString
     const notes = [];
     for (let si = 0; si < template.frets.length; si++) {
         const f = template.frets[si];
-        if (f >= 0) notes.push({ s: si, f });
+        if (_isRealFret(f)) notes.push({ s: si, f });
     }
     const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, notes, targetMidiTuning, maxFret);
     const target = targetMidiTuning || DEFAULT_TARGET_MIDI_TUNING;
@@ -481,8 +495,8 @@ function _materializePlacements(notes, placements, maxFret, revoiced) {
             ? Object.assign({}, src, pl.entry)
             : Object.assign({}, src, { s: pl.s, f: pl.f });
         if (!pl.entry) {
-            if (Number.isInteger(src.sl) && src.sl >= 0) copy.sl = _clampFret(pl.f + (src.sl - src.f), maxFret);
-            else if (Number.isInteger(src.slu) && src.slu >= 0) copy.slu = _clampFret(pl.f + (src.slu - src.f), maxFret);
+            const slide = _slideTarget(src);
+            if (slide) copy[slide.field] = _clampFret(pl.f + (slide.to - src.f), maxFret);
         }
         copy._origNote = src;
         if (revoiced !== undefined) copy._crRevoiced = revoiced;
@@ -597,7 +611,7 @@ export function createRetuner(opts) {
             if (!template || !Array.isArray(template.frets)) return template;
             const tNotes = [];
             for (let si = 0; si < template.frets.length; si++) {
-                if (template.frets[si] >= 0) tNotes.push({ s: si, f: template.frets[si] });
+                if (_isRealFret(template.frets[si])) tNotes.push({ s: si, f: template.frets[si] });
             }
             // Single-note / empty templates keep the per-note
             // path (identical to the pre-solver behavior).
@@ -712,8 +726,7 @@ export function createRetuner(opts) {
                 // solution is solved from PLAIN frets, which only anchors
                 // a static position. The ad-hoc path below goes through
                 // remapNoteEntry/remapSlide instead, keeping slides exact.
-                const hasSlide = chNotes.some(n => (Number.isInteger(n.sl) && n.sl >= 0)
-                    || (Number.isInteger(n.slu) && n.slu >= 0));
+                const hasSlide = chNotes.some(n => _slideTarget(n) !== null);
                 if (!hasSlide && byString && tmpl && chNotes.length > 0
                     && chNotes.every(n => tmpl.frets[n.s] === n.f && byString.has(n.s))) {
                     // One note per source string: a malformed chart
@@ -761,10 +774,15 @@ export function createRetuner(opts) {
         // frets on screen should match what the player's bare instrument
         // actually needs). So the shift applies unconditionally, INCLUDING
         // r === 0 — there is no "stays open" exception. Slides shift the
-        // same way; anchors are rebuilt as fresh objects; template frets
-        // shift except the -1 "unused string" sentinel; fingers are
-        // unaffected. Notes/anchors that can't reach the capo's floor at
-        // all already dropped or revoiced earlier in this function (via
+        // same way (sl/slu are always-present fields, not omitted when
+        // there's no slide, so shifting them unconditionally would turn
+        // "not applicable" into a fabricated slide destination — that's
+        // what _isRealFret/_slideTarget above guard against, without this
+        // block hardcoding whatever sentinel value that "not applicable"
+        // happens to be today); anchors are rebuilt as fresh objects;
+        // template frets shift the same way, for the same reason; fingers
+        // are unaffected. Notes/anchors that can't reach the capo's floor
+        // at all already dropped or revoiced earlier in this function (via
         // effectiveTargetMidiTuning/effectiveMaxFret raising the floor and
         // shrinking the ceiling before any of this runs) — that's the
         // "no notes below the capo" guardrail; this block only relabels
@@ -773,8 +791,8 @@ export function createRetuner(opts) {
             const off = displayFretOffset;
             const shiftNote = (n) => {
                 n.f += off;
-                if (Number.isInteger(n.sl)) n.sl += off;
-                if (Number.isInteger(n.slu)) n.slu += off;
+                if (_isRealFret(n.sl)) n.sl += off;
+                if (_isRealFret(n.slu)) n.slu += off;
             };
             for (const n of remappedNotes) shiftNote(n);
             for (const ch of remappedChords) {
@@ -784,7 +802,7 @@ export function createRetuner(opts) {
                 a => ({ time: a.time, fret: a.fret + off, width: a.width }));
             remappedTemplates = Array.isArray(remappedTemplates)
                 ? remappedTemplates.map(t => (t && Array.isArray(t.frets))
-                    ? Object.assign({}, t, { frets: t.frets.map(f => (f >= 0 ? f + off : f)) })
+                    ? Object.assign({}, t, { frets: t.frets.map(f => (_isRealFret(f) ? f + off : f)) })
                     : t)
                 : remappedTemplates;
         }
