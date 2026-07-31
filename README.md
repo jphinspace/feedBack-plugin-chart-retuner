@@ -86,6 +86,14 @@ Two per-tuning adjustments on top of the string pitches themselves
   is the reverse. Save +1 on a cello profile and every bass chart plays
   an octave up by default.
 
+A chart authored with its own native capo (e.g. a guitar arrangement
+recorded with a capo on fret 2) keeps looking exactly like the original —
+open strings stay open, fretted notes keep their original fret numbers —
+whenever the target tuning doesn't otherwise need to reach lower than
+that capo allows. You don't need to manually dial in a matching capo just
+to view or play the chart as authored; the target capo above is for
+layering an *additional* capo of your own on top.
+
 Both live in two places:
 
 - **Player controls** — a *Capo* and an *Octave* slider in the player

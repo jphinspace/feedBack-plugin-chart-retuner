@@ -46,6 +46,8 @@ const {
     remapAnchors,
     remapChordTemplate,
     remapChordTemplates,
+    canFoldSourceCapo,
+    applySourceCapoFold,
     intToHex,
     LIGHT_GRAY_COLOR,
     resolveColorsArray,
@@ -1566,6 +1568,75 @@ const SPOT_FRETS = [0, 10, 20];
         check(`capo ${k}: chord voicing identical to the un-capo'd chart`,
             bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), expectedChord);
     }
+}
+
+// Source-capo pass-through (feedBack chart-retuner bug report, Wonderwall
+// Rhythm/E-Standard): a chart authored with its OWN native capo (bundle.capo,
+// e.g. songInfo.capo=2) must come back looking untouched when the target
+// tuning matches the source and the plugin's own capo is off — not silently
+// re-fretted by the source's capo amount. canFoldSourceCapo/
+// applySourceCapoFold are the fix; end-to-end via createRetuner, mirroring
+// exactly what screen.js's _transform() does with songInfo.capo.
+{
+    const { createRetuner } = CR;
+    const eadgbe = resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']);
+    const sourceTuning = [0, 0, 0, 0, 0, 0];
+    const rawNotes = [
+        { t: 0, s: 0, f: 0 },  // open low E, capo-relative
+        { t: 1, s: 1, f: 2 },
+        { t: 2, s: 2, f: 2 },
+    ];
+    const rawChords = [{ id: null, t: 3, notes: [{ t: 3, s: 3, f: 0 }, { t: 3, s: 4, f: 1 }] }];
+    const rawAnchors = [{ time: 0, fret: 0, width: 3 }];
+    const mkBundle = () => ({
+        notes: rawNotes.map(n => ({ ...n })),
+        chords: rawChords.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) })),
+        anchors: rawAnchors.map(a => ({ ...a })),
+        chordTemplates: [],
+        tuning: sourceTuning, capo: 2, stringCount: 6,
+    });
+
+    // Same tuning as the source, plugin capo off: the reported bug.
+    const bundle = mkBundle();
+    createRetuner().apply(bundle, eadgbe.midiTuning, 24);
+    check('source capo, no target capo: apply() alone still bakes in the +2 shift (pre-fix behavior)',
+        bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 1, f: 4 }, { s: 2, f: 4 }]);
+    check('source capo, no target capo: canFoldSourceCapo says yes', canFoldSourceCapo(bundle, 2), true);
+    applySourceCapoFold(bundle, 2);
+    check('source capo, no target capo: notes match the untouched chart after folding',
+        bundle.notes.map(n => ({ s: n.s, f: n.f })), rawNotes.map(n => ({ s: n.s, f: n.f })));
+    check('source capo, no target capo: chord voicing matches the untouched chart after folding',
+        bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), rawChords[0].notes.map(n => ({ s: n.s, f: n.f })));
+    check('source capo, no target capo: anchor matches the untouched chart after folding',
+        bundle.anchors, rawAnchors);
+
+    // Plugin capo manually matched to the source's own (the workaround the
+    // bug report found): apply() alone already reproduces the original, so
+    // folding on top must be a no-op (never double-subtract).
+    const matched = mkBundle();
+    createRetuner().apply(matched, effectiveTargetMidiTuning(eadgbe.midiTuning, 2, 0), effectiveMaxFret(24, 2));
+    check('source capo == target capo: already identical to the untouched chart',
+        matched.notes.map(n => ({ s: n.s, f: n.f })), rawNotes.map(n => ({ s: n.s, f: n.f })));
+    check('source capo == target capo: canFoldSourceCapo correctly refuses (would double-subtract)',
+        canFoldSourceCapo(matched, 2), false);
+
+    // No native source capo: canFoldSourceCapo is a guaranteed no-op.
+    const plain = mkBundle();
+    plain.capo = 0;
+    createRetuner().apply(plain, eadgbe.midiTuning, 24);
+    check('no source capo: canFoldSourceCapo is false (nothing to fold)', canFoldSourceCapo(plain, 0), false);
+
+    // A note that can't be re-expressed relative to the source capo (its
+    // absolute fret already sits below it) blocks folding for the WHOLE
+    // bundle rather than partially shifting some notes and not others.
+    const unsafe = { notes: [{ f: 1 }, { f: 5 }], chords: [], anchors: [], chordTemplates: [] };
+    check('canFoldSourceCapo: a single below-capo fretted note blocks the whole bundle',
+        canFoldSourceCapo(unsafe, 2), false);
+    const safe = { notes: [{ f: 0 }, { f: 2 }, { f: 5 }], chords: [], anchors: [], chordTemplates: [] };
+    check('canFoldSourceCapo: every value at/above the capo (or open) is safe', canFoldSourceCapo(safe, 2), true);
+    applySourceCapoFold(safe, 2);
+    check('applySourceCapoFold: opens stay open, others shift down by the capo',
+        safe.notes.map(n => n.f), [0, 0, 3]);
 }
 
 // Octave-offset identity: an E-standard bass chart with a +1 octave

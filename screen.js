@@ -246,6 +246,21 @@ import { CR } from './src/chart-retune.js';
         const all = sameSet ? filtered : _applyRetune(input.allNotes, input.allChords, null, input.chordTemplates,
             songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret);
 
+        // The chart's own native capo (e.g. a guitar recorded with a capo)
+        // otherwise bakes silently into every fret number above — decided
+        // once from `all` (the fuller of the two views) and forced onto
+        // `filtered` too, so both agree with the single `capo` value
+        // returned below instead of one view's frets going stale relative
+        // to it. See canFoldSourceCapo's own comment for why this can't
+        // always apply (a target that needs to reach lower than the
+        // source's capo allows keeps today's absolute-fret behavior).
+        const sourceCapo = songInfo.capo | 0;
+        const foldedSourceCapo = CR.canFoldSourceCapo(all, sourceCapo) ? sourceCapo : 0;
+        if (foldedSourceCapo > 0) {
+            CR.applySourceCapoFold(filtered, foldedSourceCapo);
+            if (all !== filtered) CR.applySourceCapoFold(all, foldedSourceCapo);
+        }
+
         const n = target.midiTuning.length;
         const isBass = /\bbass\b/i.test(songInfo.arrangement || '');
         const base = _rendererBaseOpenMidi(n, isBass);
@@ -260,7 +275,7 @@ import { CR } from './src/chart-retune.js';
             chordTemplates: filtered.chordTemplates,
             stringCount: n,
             tuning: tuningOffsets,
-            capo: effCapo,
+            capo: effCapo + foldedSourceCapo,
         };
     }
 
