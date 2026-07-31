@@ -27,19 +27,21 @@ export function isValidMaxFret(v) {
     return MAX_FRET_OPTIONS.indexOf(v) !== -1;
 }
 
-// Capo — a per-tuning-profile fret the player clamps on top of the
-// tuning's own string pitches; frets above (maxFret - capo) fall off the
-// neck. 0 = no capo; negative or >= maxFret is invalid. Separate from
-// the chart's own SOURCE capo (songInfo.capo, consumed by
-// computeOpenStringMidiByString below); this one describes the TARGET
-// instrument, gated by capoEnabled below.
+// Retuner capo — a per-tuning-profile fret the player clamps on top of
+// the tuning's own string pitches; frets above (maxFret - capo) fall off
+// the neck. 0 = no capo; negative or >= maxFret is invalid. Called out as
+// "retuner capo" specifically (in code and comments) to keep it distinct
+// from the chart's own SOURCE capo (songInfo.capo, consumed by
+// computeOpenStringMidiByString below) — this one describes the TARGET
+// instrument this plugin is retuning onto, gated by capoEnabled below.
 export function isValidCapo(v, maxFret) {
     return Number.isInteger(v) && v >= 0 && v < (Number.isInteger(maxFret) ? maxFret : DEFAULT_MAX_FRET);
 }
 export function resolveCapo(v, maxFret) {
     return isValidCapo(v, maxFret) ? v : 0;
 }
-// On/off gate for the capo above — off by default; only literal `true` counts.
+// On/off gate for the retuner capo above — off by default; only literal
+// `true` counts.
 export function resolveCapoEnabled(v) {
     return v === true;
 }
@@ -53,6 +55,35 @@ export function isValidOctaveOffset(v) {
 }
 export function resolveOctaveOffset(v) {
     return isValidOctaveOffset(v) ? v : 0;
+}
+
+// Resolves the retuner capo/capoEnabled/octaveOffset fields off a raw
+// profile-shaped object, against `maxFret` — shared by every place that
+// builds a resolved tuning-profile result (a built-in preset, a saved
+// custom tuning, or the unsaved active tuning) and by screen.js/
+// settings.html when they save or seed one of these profiles, so the
+// three fields can't drift out of sync between all those call sites.
+export function resolveRetunerCapoOctaveFields(raw, maxFret) {
+    return {
+        capo: resolveCapo(raw.capo, maxFret),
+        capoEnabled: resolveCapoEnabled(raw.capoEnabled),
+        octaveOffset: resolveOctaveOffset(raw.octaveOffset),
+    };
+}
+
+// Merges a per-tuning quick-adjust override ({ capo, capoEnabled, octave })
+// onto an already-resolved tuning profile, in place — shared by screen.js's
+// player-controls widget and settings.html's editor so a retuner-capo
+// override applies identically wherever a profile gets resolved. Invalid or
+// missing override fields leave the profile's own value untouched. Callers
+// pass a profile they already own (a fresh resolve or their own shallow
+// copy), since this mutates it directly rather than returning a new object.
+export function applyRetunerCapoOctaveOverride(profile, override) {
+    if (!override || typeof override !== 'object') return profile;
+    if (isValidCapo(override.capo, profile.maxFret)) profile.capo = override.capo;
+    if (typeof override.capoEnabled === 'boolean') profile.capoEnabled = override.capoEnabled;
+    if (isValidOctaveOffset(override.octave)) profile.octaveOffset = override.octave;
+    return profile;
 }
 
 // The open-string MIDI array the remap engine should actually match
@@ -285,9 +316,7 @@ export function resolveActiveTuning(id, customTunings, arrClass = 'bass') {
         colors: p.colors,
         roles: Array.isArray(p.roles) ? p.roles.slice() : null,
         maxFret: p.maxFret,
-        capo: resolveCapo(p.capo, p.maxFret),
-        capoEnabled: resolveCapoEnabled(p.capoEnabled),
-        octaveOffset: resolveOctaveOffset(p.octaveOffset),
+        ...resolveRetunerCapoOctaveFields(p, p.maxFret),
     });
     const preset = BUILTIN_PRESET_TUNINGS.find(p => p.id === targetId);
     if (preset) return asResult(preset);
@@ -300,9 +329,7 @@ export function resolveActiveTuning(id, customTunings, arrClass = 'bass') {
             colors: found.colors,
             roles: null,
             maxFret,
-            capo: resolveCapo(found.capo, maxFret),
-            capoEnabled: resolveCapoEnabled(found.capoEnabled),
-            octaveOffset: resolveOctaveOffset(found.octaveOffset),
+            ...resolveRetunerCapoOctaveFields(found, maxFret),
         };
     }
     return asResult(BUILTIN_PRESET_TUNINGS.find(p => p.id === defaultTuningIdForClass(arrClass)));
@@ -340,9 +367,7 @@ export function parseActiveTuning(raw) {
         colors: Array.isArray(d.colors) ? d.colors.slice() : null,
         roles: null,
         maxFret,
-        capo: resolveCapo(d.capo, maxFret),
-        capoEnabled: resolveCapoEnabled(d.capoEnabled),
-        octaveOffset: resolveOctaveOffset(d.octaveOffset),
+        ...resolveRetunerCapoOctaveFields(d, maxFret),
     };
 }
 
@@ -383,7 +408,6 @@ export function resolveTargetTuning(spec) {
 // codebase actually omits it, so this exists purely as a deep safety net.
 const DEFAULT_TARGET = resolveTargetTuning(DEFAULT_TARGET_TUNING);
 export const DEFAULT_TARGET_MIDI_TUNING = DEFAULT_TARGET.midiTuning;
-export const TARGET_OPEN_STRING_LABELS = DEFAULT_TARGET.labels;
 
 // BEADG's own top string (G2) — the usual high-B extension point.
 const BEADG_TOP_STRING_MIDI = 43;

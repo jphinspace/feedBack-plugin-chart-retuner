@@ -28,7 +28,6 @@ const {
     midiToNoteLabel,
     defaultExtensionNote,
     colorRoleForNote,
-    BEADG_COLOR_ROLES,
     isValidTuningStringsArray,
     BUILTIN_PRESET_TUNINGS,
     DEFAULT_TUNING_ID,
@@ -36,6 +35,8 @@ const {
     defaultTuningIdForClass,
     arrangementClassFor,
     resolveActiveTuning,
+    resolveRetunerCapoOctaveFields,
+    applyRetunerCapoOctaveOverride,
     resolveTargetTuning,
     computeOpenStringMidiByString,
     computeArrangementShift,
@@ -45,9 +46,6 @@ const {
     resolveChordCollisions,
     remapAnchors,
     remapChordTemplate,
-    remapChordTemplates,
-    canFoldSourceCapo,
-    applySourceCapoFold,
     intToHex,
     LIGHT_GRAY_COLOR,
     resolveColorsArray,
@@ -786,19 +784,6 @@ const SPOT_FRETS = [0, 10, 20];
     check('colliding template with no fingers array passes fingers through as-is', remapped.fingers, null);
 }
 
-// Array wrapper preserves chord_id indexing.
-{
-    const ctx = songContext(4, [0, 0, 0, 0], 0); // EADG identity
-    const templates = [
-        { frets: [0, -1, -1, -1], fingers: null },
-        { frets: [-1, 2, -1, -1], fingers: null },
-    ];
-    const remapped = remapChordTemplates(ctx.sourceOpenMidiByString, ctx.naturalTargetByString, templates);
-    check('remapChordTemplates keeps the array length/order (id indexing)', remapped.length, 2);
-    check('remapChordTemplates id 0 shifted per EADG identity (string+1, fret unchanged)', remapped[0].frets, [-1, 0, -1, -1, -1]);
-    check('remapChordTemplates id 1 shifted per EADG identity (string+1, fret unchanged)', remapped[1].frets, [-1, -1, 2, -1, -1]);
-}
-
 // Custom target tuning: parseTargetNote / resolveTargetTuning.
 {
     check('parseTargetNote: natural note + octave 0', parseTargetNote('B0'), { midi: 23, label: 'B' });
@@ -1037,12 +1022,15 @@ const SPOT_FRETS = [0, 10, 20];
 }
 
 // displayFretOffset: physical-fret display shift (capo marker follow-up).
-// The remap stays capo-relative internally; the offset relabels FRETTED
-// outputs (notes, slide endpoints, chord notes, template frets, anchors)
-// to physical frets while opens stay 0. Invariant exercised throughout:
-// remapping a same-tuning source against its own capo-shifted pitches
-// (effective = open + capo, ceiling = maxFret − capo, offset = capo)
-// must return every playable note at its ORIGINAL physical fret.
+// The remap stays capo-relative internally; the offset relabels EVERY
+// output (notes, slide endpoints, chord notes, template frets, anchors) to
+// physical frets — INCLUDING what would otherwise read as an open string at
+// relative fret 0, since no capo bar is ever drawn to actually ring it open
+// (feedBack chart-retuner: "fret 0 = the capo" read as broken/confusing).
+// Invariant exercised throughout: remapping a same-tuning source against its
+// own capo-shifted pitches (effective = open + capo, ceiling = maxFret −
+// capo, offset = capo) must return every playable note at its ORIGINAL
+// physical fret.
 {
     const { createRetuner } = CR;
     const capo = 3;
@@ -1053,7 +1041,7 @@ const SPOT_FRETS = [0, 10, 20];
     const retuner = createRetuner();
     const rawNotes = [
         { t: 0, s: 0, f: 5 },        // sounds 45 → relative 2 → physical 5
-        { t: 1, s: 0, f: capo },     // sounds at the capo → relative 0: OPEN, stays 0
+        { t: 1, s: 0, f: capo },     // sounds at the capo → relative 0 → physical == capo itself, not open
         { t: 2, s: 0, f: 2 },        // sounds below the capo → unplayable, drops
         { t: 3, s: 0, f: 7, sl: 9 }, // slide: both endpoints back to physical
     ];
@@ -1064,7 +1052,7 @@ const SPOT_FRETS = [0, 10, 20];
     };
     retuner.apply(bundle, effective, relCeiling, capo);
     check('displayFretOffset: fretted note comes back at its physical fret',
-        bundle.notes.map(n => n.f), [5, 0, 7]);
+        bundle.notes.map(n => n.f), [5, 3, 7]);
     check('displayFretOffset: the below-capo note drops (physical frets start above the capo)',
         bundle.notes.some(n => n._origNote.f === 2), false);
     check('displayFretOffset: slide endpoint shifts with its note',
@@ -1086,7 +1074,7 @@ const SPOT_FRETS = [0, 10, 20];
     bundle.notes = rawNotes; bundle.anchors = rawAnchors;
     retuner.apply(bundle, effective, relCeiling, capo);
     check('displayFretOffset: restoring the offset re-derives physical frets',
-        bundle.notes.map(n => n.f), [5, 0, 7]);
+        bundle.notes.map(n => n.f), [5, 3, 7]);
 
     // Bogus offsets sanitize to 0 rather than shifting by garbage.
     bundle.notes = rawNotes; bundle.anchors = rawAnchors;
@@ -1096,9 +1084,9 @@ const SPOT_FRETS = [0, 10, 20];
 }
 
 // displayFretOffset across chords and templates: template frets shift
-// where > 0 (-1 unused and 0 open preserved), fingers untouched, and
-// chord instances follow their template's solved voicing into the same
-// physical frets.
+// except the -1 "unused string" sentinel (0/open is NOT preserved — see the
+// block above), fingers untouched, and chord instances follow their
+// template's solved voicing into the same physical frets.
 {
     const { createRetuner } = CR;
     const capo = 3;
@@ -1109,7 +1097,7 @@ const SPOT_FRETS = [0, 10, 20];
     const retuner = createRetuner();
     const rawTemplates = [
         { name: 'X', frets: [5, 7], fingers: [1, 3] },   // → relative [2, 4]
-        { name: 'Open-ish', frets: [3, -1], fingers: [0, -1] }, // string 0 AT the capo → open
+        { name: 'Open-ish', frets: [3, -1], fingers: [0, -1] }, // string 0 AT the capo → physically fretted, not open
     ];
     const rawChords = [{ t: 0, id: 0, notes: [{ s: 0, f: 5 }, { s: 1, f: 7 }] }];
     const rawNotes = [];
@@ -1125,8 +1113,8 @@ const SPOT_FRETS = [0, 10, 20];
     // touches the frets, leaving fingers exactly as solved.
     check('displayFretOffset: template fingers are untouched by the shift',
         bundle.chordTemplates[0].fingers, [1, 2]);
-    check('displayFretOffset: an at-the-capo template note stays open (0), unused stays -1',
-        bundle.chordTemplates[1].frets, [0, -1]);
+    check('displayFretOffset: an at-the-capo template note becomes physically fretted (no longer 0), unused stays -1',
+        bundle.chordTemplates[1].frets, [3, -1]);
     check('displayFretOffset: chord instance notes land on the template\'s physical frets',
         bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 5 }, { s: 1, f: 7 }]);
     check('displayFretOffset: raw template object is untouched',
@@ -1206,8 +1194,8 @@ const SPOT_FRETS = [0, 10, 20];
         EXTENDED_DEFAULT_TARGET_TUNING[7], 'B2');
 }
 
-// colorRoleForNote / BEADG_COLOR_ROLES: symbolic color roles only, no
-// actual colors (that's screen.js's job).
+// colorRoleForNote: symbolic color roles only, no actual colors (that's
+// screen.js's job).
 {
     check('colorRoleForNote: B0 -> lowB', colorRoleForNote(23), 'lowB');
     check('colorRoleForNote: E1 -> e', colorRoleForNote(28), 'e');
@@ -1220,9 +1208,6 @@ const SPOT_FRETS = [0, 10, 20];
     check('colorRoleForNote: C#0 (2nd low ext) -> lowExt2', colorRoleForNote(13), 'lowExt2');
     check('colorRoleForNote: a 3rd low extension (C#0 - 5 = G#-1) -> gray', colorRoleForNote(8), 'gray');
     check('colorRoleForNote: an arbitrary custom note (A0) -> gray', colorRoleForNote(21), 'gray');
-
-    check('BEADG_COLOR_ROLES has exactly 5 entries, low to high',
-        BEADG_COLOR_ROLES, ['lowB', 'e', 'a', 'd', 'g']);
 }
 
 // isValidTuningStringsArray: string-count, MIDI-range, and parse-validity checks.
@@ -1532,11 +1517,60 @@ const SPOT_FRETS = [0, 10, 20];
     check('effectiveMaxFret never collapses below 1', effectiveMaxFret(20, 25), 1);
 }
 
+// resolveRetunerCapoOctaveFields: the shared { capo, capoEnabled,
+// octaveOffset } resolver every resolved-profile builder (resolveActiveTuning's
+// two branches, parseActiveTuning, screen.js's save/seed paths) delegates to.
+{
+    check('resolveRetunerCapoOctaveFields: valid raw fields pass through',
+        resolveRetunerCapoOctaveFields({ capo: 4, capoEnabled: true, octaveOffset: 1 }, 20),
+        { capo: 4, capoEnabled: true, octaveOffset: 1 });
+    check('resolveRetunerCapoOctaveFields: out-of-range/invalid fields fall back per-field',
+        resolveRetunerCapoOctaveFields({ capo: 25, capoEnabled: 'yes', octaveOffset: 9 }, 20),
+        { capo: 0, capoEnabled: false, octaveOffset: 0 });
+    check('resolveRetunerCapoOctaveFields: missing fields resolve to defaults (off)',
+        resolveRetunerCapoOctaveFields({}, 20),
+        { capo: 0, capoEnabled: false, octaveOffset: 0 });
+    check('resolveRetunerCapoOctaveFields: capo validated against the passed-in maxFret, not a fixed ceiling',
+        resolveRetunerCapoOctaveFields({ capo: 13 }, 14),
+        { capo: 13, capoEnabled: false, octaveOffset: 0 });
+}
+
+// applyRetunerCapoOctaveOverride: the shared per-tuning quick-adjust merge
+// screen.js's player-controls widget and settings.html's editor both apply
+// on top of an already-resolved profile.
+{
+    const baseProfile = () => ({ id: 'eadgbe', maxFret: 24, capo: 0, capoEnabled: false, octaveOffset: 0 });
+    check('applyRetunerCapoOctaveOverride: a valid override overwrites all three fields',
+        applyRetunerCapoOctaveOverride(baseProfile(), { capo: 3, capoEnabled: true, octave: -1 }),
+        { id: 'eadgbe', maxFret: 24, capo: 3, capoEnabled: true, octaveOffset: -1 });
+    check('applyRetunerCapoOctaveOverride: no override (null/non-object) leaves the profile untouched',
+        [applyRetunerCapoOctaveOverride(baseProfile(), null), applyRetunerCapoOctaveOverride(baseProfile(), 'nope')],
+        [baseProfile(), baseProfile()]);
+    check('applyRetunerCapoOctaveOverride: an out-of-range capo (>= the profile\'s own maxFret) leaves it untouched',
+        applyRetunerCapoOctaveOverride(baseProfile(), { capo: 24, capoEnabled: true, octave: 1 }),
+        { id: 'eadgbe', maxFret: 24, capo: 0, capoEnabled: true, octaveOffset: 1 });
+    check('applyRetunerCapoOctaveOverride: a non-boolean capoEnabled leaves it untouched',
+        applyRetunerCapoOctaveOverride(baseProfile(), { capo: 2, capoEnabled: 'yes', octave: 0 }),
+        { id: 'eadgbe', maxFret: 24, capo: 2, capoEnabled: false, octaveOffset: 0 });
+    check('applyRetunerCapoOctaveOverride: an out-of-range octave leaves it untouched',
+        applyRetunerCapoOctaveOverride(baseProfile(), { capo: 0, capoEnabled: false, octave: 9 }),
+        baseProfile());
+    check('applyRetunerCapoOctaveOverride: mutates and returns the same object (in-place)', (() => {
+        const p = baseProfile();
+        return applyRetunerCapoOctaveOverride(p, { capo: 5, capoEnabled: true, octave: 2 }) === p;
+    })(), true);
+}
+
 // Capo cancellation identity: tuning every string down k half-steps and
-// clamping a capo at fret k is a cumulative offset of 0 — the remapped
-// chart must equal the un-capo'd original exactly (for charts that fit
-// the capo-shortened neck), for k = 1..4. End-to-end via createRetuner,
-// the same path screen.js's draw() uses.
+// clamping a capo at fret k is a cumulative offset of 0 on the internal,
+// pre-display-shift matching math — the CAPO-RELATIVE remap must equal the
+// un-capo'd original exactly (for charts that fit the capo-shortened neck),
+// for k = 1..4. Deliberately omits displayFretOffset (screen.js always
+// passes it as the retuner capo, =k here) — this test verifies the
+// underlying pitch matching is exact, not the final on-screen fret, which
+// now shifts by +k
+// per the "always show the true physical fret" fix (see the
+// displayFretOffset tests below for that layer).
 {
     const { createRetuner } = CR;
     const eadg = resolveTargetTuning(['E1', 'A1', 'D2', 'G2']);
@@ -1570,73 +1604,40 @@ const SPOT_FRETS = [0, 10, 20];
     }
 }
 
-// Source-capo pass-through (feedBack chart-retuner bug report, Wonderwall
-// Rhythm/E-Standard): a chart authored with its OWN native capo (bundle.capo,
-// e.g. songInfo.capo=2) must come back looking untouched when the target
-// tuning matches the source and the plugin's own capo is off — not silently
-// re-fretted by the source's capo amount. canFoldSourceCapo/
-// applySourceCapoFold are the fix; end-to-end via createRetuner, mirroring
-// exactly what screen.js's _transform() does with songInfo.capo.
+// Source capo bakes into absolute pitch, always (feedBack chart-retuner
+// Wonderwall Rhythm/E-Standard report): a chart authored with its OWN native
+// capo (bundle.capo, e.g. songInfo.capo=2) must reproduce the correct SOUNDING
+// pitch on a bare target with no relabeling trick — the physical fret needed
+// on an uncapo'd neck, full stop — never redisplayed as the chart's own
+// smaller, capo-relative numbers. That keeps notes, chords, and anchors
+// consistent with each other (they all derive from the same adjustment) AND
+// consistent with plain, uncapo'd open-string tuning names (nothing here
+// claims a note is "open" when it truly isn't, on a bare neck).
 {
     const { createRetuner } = CR;
     const eadgbe = resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']);
     const sourceTuning = [0, 0, 0, 0, 0, 0];
     const rawNotes = [
-        { t: 0, s: 0, f: 0 },  // open low E, capo-relative
+        { t: 0, s: 0, f: 0 },  // open low E in the source, capo-relative
         { t: 1, s: 1, f: 2 },
         { t: 2, s: 2, f: 2 },
     ];
     const rawChords = [{ id: null, t: 3, notes: [{ t: 3, s: 3, f: 0 }, { t: 3, s: 4, f: 1 }] }];
     const rawAnchors = [{ time: 0, fret: 0, width: 3 }];
-    const mkBundle = () => ({
+    const bundle = {
         notes: rawNotes.map(n => ({ ...n })),
         chords: rawChords.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) })),
         anchors: rawAnchors.map(a => ({ ...a })),
         chordTemplates: [],
         tuning: sourceTuning, capo: 2, stringCount: 6,
-    });
-
-    // Same tuning as the source, plugin capo off: the reported bug.
-    const bundle = mkBundle();
+    };
     createRetuner().apply(bundle, eadgbe.midiTuning, 24);
-    check('source capo, no target capo: apply() alone still bakes in the +2 shift (pre-fix behavior)',
+    check('source capo, no target capo: notes land on the true physical fret (source capo folded into pitch, not redisplayed)',
         bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 1, f: 4 }, { s: 2, f: 4 }]);
-    check('source capo, no target capo: canFoldSourceCapo says yes', canFoldSourceCapo(bundle, 2), true);
-    applySourceCapoFold(bundle, 2);
-    check('source capo, no target capo: notes match the untouched chart after folding',
-        bundle.notes.map(n => ({ s: n.s, f: n.f })), rawNotes.map(n => ({ s: n.s, f: n.f })));
-    check('source capo, no target capo: chord voicing matches the untouched chart after folding',
-        bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), rawChords[0].notes.map(n => ({ s: n.s, f: n.f })));
-    check('source capo, no target capo: anchor matches the untouched chart after folding',
-        bundle.anchors, rawAnchors);
-
-    // Plugin capo manually matched to the source's own (the workaround the
-    // bug report found): apply() alone already reproduces the original, so
-    // folding on top must be a no-op (never double-subtract).
-    const matched = mkBundle();
-    createRetuner().apply(matched, effectiveTargetMidiTuning(eadgbe.midiTuning, 2, 0), effectiveMaxFret(24, 2));
-    check('source capo == target capo: already identical to the untouched chart',
-        matched.notes.map(n => ({ s: n.s, f: n.f })), rawNotes.map(n => ({ s: n.s, f: n.f })));
-    check('source capo == target capo: canFoldSourceCapo correctly refuses (would double-subtract)',
-        canFoldSourceCapo(matched, 2), false);
-
-    // No native source capo: canFoldSourceCapo is a guaranteed no-op.
-    const plain = mkBundle();
-    plain.capo = 0;
-    createRetuner().apply(plain, eadgbe.midiTuning, 24);
-    check('no source capo: canFoldSourceCapo is false (nothing to fold)', canFoldSourceCapo(plain, 0), false);
-
-    // A note that can't be re-expressed relative to the source capo (its
-    // absolute fret already sits below it) blocks folding for the WHOLE
-    // bundle rather than partially shifting some notes and not others.
-    const unsafe = { notes: [{ f: 1 }, { f: 5 }], chords: [], anchors: [], chordTemplates: [] };
-    check('canFoldSourceCapo: a single below-capo fretted note blocks the whole bundle',
-        canFoldSourceCapo(unsafe, 2), false);
-    const safe = { notes: [{ f: 0 }, { f: 2 }, { f: 5 }], chords: [], anchors: [], chordTemplates: [] };
-    check('canFoldSourceCapo: every value at/above the capo (or open) is safe', canFoldSourceCapo(safe, 2), true);
-    applySourceCapoFold(safe, 2);
-    check('applySourceCapoFold: opens stay open, others shift down by the capo',
-        safe.notes.map(n => n.f), [0, 0, 3]);
+    check('source capo, no target capo: chord notes shift by the same amount as plain notes',
+        bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 3, f: 2 }, { s: 4, f: 3 }]);
+    check('source capo, no target capo: the anchor shifts by the same amount too (stays consistent with the notes)',
+        bundle.anchors, [{ time: 0, fret: 2, width: 3 }]);
 }
 
 // Octave-offset identity: an E-standard bass chart with a +1 octave

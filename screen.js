@@ -131,13 +131,7 @@ import { CR } from './src/chart-retune.js';
         const active = _readActiveTuning();
         if (active) return active;
         const t = CR.resolveActiveTuning(_read(_profileKeyFor(arrClass)), _readCustomTunings(), arrClass);
-        const ov = _readTuningAdjustOverrides()[t.id];
-        if (ov && typeof ov === 'object') {
-            if (CR.isValidCapo(ov.capo, t.maxFret)) t.capo = ov.capo;
-            if (typeof ov.capoEnabled === 'boolean') t.capoEnabled = ov.capoEnabled;
-            if (CR.isValidOctaveOffset(ov.octave)) t.octaveOffset = ov.octave;
-        }
-        return t;
+        return CR.applyRetunerCapoOctaveOverride(t, _readTuningAdjustOverrides()[t.id]);
     }
 
     // Bridge for settings.html (dynamic-imports src/chart-retune.js directly; falls back to
@@ -155,9 +149,7 @@ import { CR } from './src/chart-retune.js';
         const grayDefaults = profile.strings.map(() => CR.intToHex(CR.LIGHT_GRAY_COLOR));
         const colors = CR.resolveColorsArray(profile.colors, n, grayDefaults);
         const maxFret = CR.isValidMaxFret(profile.maxFret) ? profile.maxFret : CR.DEFAULT_MAX_FRET;
-        const capo = CR.resolveCapo(profile.capo, maxFret);
-        const capoEnabled = CR.resolveCapoEnabled(profile.capoEnabled);
-        const octaveOffset = CR.resolveOctaveOffset(profile.octaveOffset);
+        const { capo, capoEnabled, octaveOffset } = CR.resolveRetunerCapoOctaveFields(profile, maxFret);
         const list = _readCustomTunings();
         const id = (typeof profile.id === 'string' && profile.id)
             ? profile.id
@@ -204,17 +196,36 @@ import { CR } from './src/chart-retune.js';
         return base.slice();
     }
 
+    // One retuner per view (difficulty-filtered vs. the full unfiltered
+    // chart), created once and reused across every _transform() call —
+    // createRetuner()'s own cache (keyed on the raw note/chord/anchor/
+    // template array identities + tuning + capo) only pays off when the
+    // SAME instance sees repeated calls; a fresh instance starts cold
+    // every time. Two instances, not one: the filtered and all views see
+    // DIFFERENT note arrays on every call, so sharing one would have each
+    // view's call evict the other's cache entry and neither would ever
+    // hit. _transform() can run many times per second while the mastery
+    // or retuner-capo/octave sliders are dragged (see its own comment) —
+    // this is the difference between a full re-solve and a cache hit on
+    // every one of those ticks.
+    const _crFilteredRetuner = CR.createRetuner();
+    const _crAllRetuner = CR.createRetuner();
+
     // Runs the remap engine over one notes/chords/anchors/templates view. sourceTuning/
     // sourceCapo/sourceStringCount describe the CHART's own tuning (untouched by this
-    // plugin); targetMidiTuning/maxFret already fold in this plugin's own capo, if
-    // enabled. Frets come back capo-relative, pairing with the `capo` field
-    // _transform() returns separately — the same convention every chart already uses.
-    function _applyRetune(notes, chords, anchors, chordTemplates, sourceTuning, sourceCapo, sourceStringCount, targetMidiTuning, maxFret) {
+    // plugin); targetMidiTuning/maxFret already fold in this plugin's own retuner
+    // capo, if enabled. retunerCapo is passed straight through as the engine's
+    // physical-fret display shift, so every fret/anchor/chord/template this returns
+    // is a TRUE physical fret on the target's own bare neck — never relabeled
+    // relative to the retuner capo OR the chart's native one (no capo bar is ever
+    // drawn, so nothing should read as "fret 0 = the capo"; see _transform()'s
+    // comment). `retuner` is one of the two reused instances above.
+    function _applyRetune(retuner, notes, chords, anchors, chordTemplates, sourceTuning, sourceCapo, sourceStringCount, targetMidiTuning, maxFret, retunerCapo) {
         const bundle = {
             notes, chords, anchors: anchors || [], chordTemplates,
             tuning: sourceTuning, capo: sourceCapo, stringCount: sourceStringCount,
         };
-        CR.createRetuner().apply(bundle, targetMidiTuning, maxFret);
+        retuner.apply(bundle, targetMidiTuning, maxFret, retunerCapo);
         return bundle;
     }
 
@@ -232,34 +243,30 @@ import { CR } from './src/chart-retune.js';
 
         const active = _resolveActiveTuning(arrClass);
         const target = CR.resolveTargetTuning(active.strings);
-        // This plugin's own target-side capo — separate from whatever capo the
-        // chart's source used (that still feeds sourceCapo above).
-        const effCapo = active.capoEnabled ? active.capo : 0;
-        const remapMidiTuning = (effCapo === 0 && active.octaveOffset === 0)
+        // This plugin's own "retuner capo" — separate from whatever capo the
+        // chart's source used (that still feeds sourceCapo into _applyRetune
+        // below); named explicitly so it's never confused with the chart's own
+        // capo in code that touches both. Purely a floor/ceiling constraint on
+        // what's reachable ("no notes below the capo," enforced by
+        // effectiveTargetMidiTuning raising the floor and effectiveMaxFret
+        // shrinking the ceiling below) — no capo bar is ever drawn, so every
+        // fret this plugin hands back is a TRUE PHYSICAL fret on the target's
+        // bare neck (the chart's own native capo gets folded in the same way,
+        // via sourceCapo below), never relabeled relative to either capo. A
+        // player reading the highway should see exactly what their own
+        // instrument needs, with nothing below the (invisible) capo ever
+        // appearing.
+        const retunerCapo = active.capoEnabled ? active.capo : 0;
+        const remapMidiTuning = (retunerCapo === 0 && active.octaveOffset === 0)
             ? target.midiTuning
-            : CR.effectiveTargetMidiTuning(target.midiTuning, effCapo, active.octaveOffset);
-        const maxFret = CR.effectiveMaxFret(active.maxFret, effCapo);
+            : CR.effectiveTargetMidiTuning(target.midiTuning, retunerCapo, active.octaveOffset);
+        const maxFret = CR.effectiveMaxFret(active.maxFret, retunerCapo);
 
-        const filtered = _applyRetune(input.notes, input.chords, input.anchors, input.chordTemplates,
-            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret);
+        const filtered = _applyRetune(_crFilteredRetuner, input.notes, input.chords, input.anchors, input.chordTemplates,
+            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo);
         const sameSet = input.allNotes === input.notes && input.allChords === input.chords;
-        const all = sameSet ? filtered : _applyRetune(input.allNotes, input.allChords, null, input.chordTemplates,
-            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret);
-
-        // The chart's own native capo (e.g. a guitar recorded with a capo)
-        // otherwise bakes silently into every fret number above — decided
-        // once from `all` (the fuller of the two views) and forced onto
-        // `filtered` too, so both agree with the single `capo` value
-        // returned below instead of one view's frets going stale relative
-        // to it. See canFoldSourceCapo's own comment for why this can't
-        // always apply (a target that needs to reach lower than the
-        // source's capo allows keeps today's absolute-fret behavior).
-        const sourceCapo = songInfo.capo | 0;
-        const foldedSourceCapo = CR.canFoldSourceCapo(all, sourceCapo) ? sourceCapo : 0;
-        if (foldedSourceCapo > 0) {
-            CR.applySourceCapoFold(filtered, foldedSourceCapo);
-            if (all !== filtered) CR.applySourceCapoFold(all, foldedSourceCapo);
-        }
+        const all = sameSet ? filtered : _applyRetune(_crAllRetuner, input.allNotes, input.allChords, null, input.chordTemplates,
+            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo);
 
         const n = target.midiTuning.length;
         const isBass = /\bbass\b/i.test(songInfo.arrangement || '');
@@ -275,7 +282,11 @@ import { CR } from './src/chart-retune.js';
             chordTemplates: filtered.chordTemplates,
             stringCount: n,
             tuning: tuningOffsets,
-            capo: effCapo + foldedSourceCapo,
+            // Every fret above is already physical (the retuner capo and
+            // the chart's native one are both baked directly into the fret
+            // number, never left as a separate relative term), so there's
+            // nothing left for a consumer to add back.
+            capo: 0,
         };
     }
 
@@ -373,24 +384,29 @@ import { CR } from './src/chart-retune.js';
         _crEls.octSlider.value = String(t.octaveOffset);
         _crEls.octVal.textContent = (t.octaveOffset > 0 ? '+' : '') + t.octaveOffset;
     }
-    function _crToggleCapo() {
-        const t = _resolveActiveTuning(_crCurrentArrClass());
-        const capoEnabled = !t.capoEnabled;
+    // Persists a retuner-capo/octave change for tuning `t` (the currently
+    // resolved profile) — the unsaved active tuning writes through
+    // _writeActiveTuning (its own whole-form blob); any real saved profile
+    // (built-in or custom) writes a per-tuning quick-adjust override instead,
+    // so the change doesn't leak onto a different tuning. Shared by the Capo
+    // pill toggle and the fret/octave slider commit below, which differ only
+    // in which of these three fields actually changed.
+    function _writeRetunerCapoOctave(t, retunerCapo, retunerCapoEnabled, octaveOffset) {
         if (t.id === CR.ACTIVE_TUNING_ID) {
-            _writeActiveTuning({ strings: t.strings, colors: t.colors, maxFret: t.maxFret, capo: t.capo, capoEnabled, octaveOffset: t.octaveOffset });
+            _writeActiveTuning({ strings: t.strings, colors: t.colors, maxFret: t.maxFret, capo: retunerCapo, capoEnabled: retunerCapoEnabled, octaveOffset });
             return;
         }
-        _writeTuningAdjustOverride(t.id, t.capo, capoEnabled, t.octaveOffset);
+        _writeTuningAdjustOverride(t.id, retunerCapo, retunerCapoEnabled, octaveOffset);
+    }
+    function _crToggleCapo() {
+        const t = _resolveActiveTuning(_crCurrentArrClass());
+        _writeRetunerCapoOctave(t, t.capo, !t.capoEnabled, t.octaveOffset);
     }
     function _crAdjCommit() {
         const t = _resolveActiveTuning(_crCurrentArrClass());
-        const capo = Math.max(0, Math.min(t.maxFret - 1, parseInt(_crEls.fretSlider.value, 10) || 0));
-        const oct = Math.max(CR.MIN_OCTAVE_OFFSET, Math.min(CR.MAX_OCTAVE_OFFSET, parseInt(_crEls.octSlider.value, 10) || 0));
-        if (t.id === CR.ACTIVE_TUNING_ID) {
-            _writeActiveTuning({ strings: t.strings, colors: t.colors, maxFret: t.maxFret, capo, capoEnabled: t.capoEnabled, octaveOffset: oct });
-            return;
-        }
-        _writeTuningAdjustOverride(t.id, capo, t.capoEnabled, oct);
+        const retunerCapo = Math.max(0, Math.min(t.maxFret - 1, parseInt(_crEls.fretSlider.value, 10) || 0));
+        const octaveOffset = Math.max(CR.MIN_OCTAVE_OFFSET, Math.min(CR.MAX_OCTAVE_OFFSET, parseInt(_crEls.octSlider.value, 10) || 0));
+        _writeRetunerCapoOctave(t, retunerCapo, t.capoEnabled, octaveOffset);
     }
     function _crBuildControls() {
         const root = document.createElement('div');

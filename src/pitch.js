@@ -43,10 +43,3 @@ export function midiToNoteLabel(midi) {
     const octave = Math.floor(midi / 12) - 1;
     return PITCH_CLASS_SHARP_LABELS[pc] + octave;
 }
-
-// Octave-less variant ('F#', not 'F#2') — the shape parseTargetNote's
-// own `label` field uses, for labels derived from a MIDI number rather
-// than a note spec (the capo-shifted nut labels in screen.js).
-export function midiToPitchClassLabel(midi) {
-    return PITCH_CLASS_SHARP_LABELS[((midi % 12) + 12) % 12];
-}

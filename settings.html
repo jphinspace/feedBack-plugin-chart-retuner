@@ -390,20 +390,20 @@
         let dirty = false;    // one-way flag: true once any field has changed since loadPreset()
         let rows = []; // [{ note, color }], low to high — the editor's working state
         let maxFret = CR.DEFAULT_MAX_FRET; // the editor's working max-fret value
-        let capo = 0;             // the editor's working capo fret (0 = no capo)
-        let capoEnabled = false;  // the editor's working capo on/off state — off by default
+        let retunerCapo = 0;             // the editor's working retuner-capo fret (0 = no capo)
+        let retunerCapoEnabled = false;  // the editor's working retuner-capo on/off state — off by default
         let octave = 0; // the editor's working octave offset
 
         // Capo slider ceiling tracks maxFret (capo at the last fret = no playable fret left).
         function syncAdjustControls() {
-            if (capoEnabledCheckbox) capoEnabledCheckbox.checked = capoEnabled;
-            if (capoBlock) capoBlock.classList.toggle('hidden', !capoEnabled);
+            if (capoEnabledCheckbox) capoEnabledCheckbox.checked = retunerCapoEnabled;
+            if (capoBlock) capoBlock.classList.toggle('hidden', !retunerCapoEnabled);
             if (capoSlider) {
                 capoSlider.max = String(maxFret - 1);
-                if (capo > maxFret - 1) capo = 0;
-                capoSlider.value = String(capo);
+                retunerCapo = CR.resolveCapo(retunerCapo, maxFret);
+                capoSlider.value = String(retunerCapo);
             }
-            if (capoLabel) capoLabel.textContent = capo === 0 ? 'none' : ('fret ' + capo);
+            if (capoLabel) capoLabel.textContent = retunerCapo === 0 ? 'none' : ('fret ' + retunerCapo);
             if (octaveSlider) octaveSlider.value = String(octave);
             if (octaveLabel) octaveLabel.textContent = (octave > 0 ? '+' : '') + octave;
         }
@@ -418,8 +418,8 @@
                 strings: rows.map((r) => r.note),
                 colors: rows.map((r) => r.color),
                 maxFret: maxFret,
-                capo: capo,
-                capoEnabled: capoEnabled,
+                capo: retunerCapo,
+                capoEnabled: retunerCapoEnabled,
                 octaveOffset: octave,
             };
             if (window.cr3dWriteActiveTuning) { window.cr3dWriteActiveTuning(activeTuning); return; }
@@ -454,11 +454,7 @@
             const profile = pool.find((p) => p.id === id) || BUILTIN_PRESETS[0];
             const ov = readOverrideFor(profile.id);
             if (!ov || typeof ov !== 'object') return profile;
-            const merged = Object.assign({}, profile);
-            if (CR.isValidCapo(ov.capo, merged.maxFret)) merged.capo = ov.capo;
-            if (typeof ov.capoEnabled === 'boolean') merged.capoEnabled = ov.capoEnabled;
-            if (CR.isValidOctaveOffset(ov.octave)) merged.octaveOffset = ov.octave;
-            return merged;
+            return CR.applyRetunerCapoOctaveOverride(Object.assign({}, profile), ov);
         }
 
         function showError(msg) {
@@ -571,9 +567,10 @@
             rows = profile.strings.map((note, i) => ({ note, color: resolveDisplayColor(profile.strings, profile.colors, i) }));
             maxFret = CR.isValidMaxFret(profile.maxFret) ? profile.maxFret : CR.DEFAULT_MAX_FRET;
             if (maxFretSelect) maxFretSelect.value = String(maxFret);
-            capo = CR.resolveCapo(profile.capo, maxFret);
-            capoEnabled = CR.resolveCapoEnabled(profile.capoEnabled);
-            octave = CR.resolveOctaveOffset(profile.octaveOffset);
+            const resolved = CR.resolveRetunerCapoOctaveFields(profile, maxFret);
+            retunerCapo = resolved.capo;
+            retunerCapoEnabled = resolved.capoEnabled;
+            octave = resolved.octaveOffset;
             syncAdjustControls();
         }
         // Builtin and custom presets load the same way. `seed` (optional)
@@ -700,9 +697,8 @@
                 const strings = rows.map((r) => r.note);
                 const colors = rows.map((r) => r.color);
                 const savedMaxFret = CR.isValidMaxFret(maxFret) ? maxFret : CR.DEFAULT_MAX_FRET;
-                const savedCapo = CR.resolveCapo(capo, savedMaxFret);
-                const savedCapoEnabled = CR.resolveCapoEnabled(capoEnabled);
-                const savedOctave = CR.resolveOctaveOffset(octave);
+                const { capo: savedCapo, capoEnabled: savedCapoEnabled, octaveOffset: savedOctave } =
+                    CR.resolveRetunerCapoOctaveFields({ capo: retunerCapo, capoEnabled: retunerCapoEnabled, octaveOffset: octave }, savedMaxFret);
                 const profile = { name: name, strings: strings, colors: colors, maxFret: savedMaxFret, capo: savedCapo, capoEnabled: savedCapoEnabled, octaveOffset: savedOctave };
                 if (editingId) profile.id = editingId;
                 let savedId = null;
@@ -749,7 +745,7 @@
 
         if (capoEnabledCheckbox) {
             capoEnabledCheckbox.addEventListener('change', () => {
-                capoEnabled = capoEnabledCheckbox.checked;
+                retunerCapoEnabled = capoEnabledCheckbox.checked;
                 syncAdjustControls();
                 pushActiveTuning();
                 onFieldChanged();
@@ -758,7 +754,7 @@
         if (capoSlider) {
             capoSlider.addEventListener('input', () => {
                 const v = parseInt(capoSlider.value, 10);
-                capo = CR.resolveCapo(v, maxFret);
+                retunerCapo = CR.resolveCapo(v, maxFret);
                 syncAdjustControls();
                 pushActiveTuning();
                 onFieldChanged();

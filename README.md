@@ -74,25 +74,27 @@ Set your own custom tunings' max fret when you create or edit them.
 Two per-tuning adjustments on top of the string pitches themselves
 (both default to 0 on every built-in preset):
 
-- **Capo** — clamp a virtual capo on any fret from 1 to (max fret − 1).
-  One fret = one half-step up per string; the frets above
-  (max fret − capo) fall off the end of the neck, and the nut labels
-  show the capo'd pitches. Tune every string down a half-step and capo
-  fret 1 and you get the exact original chart back — the cumulative
-  offset is zero.
+- **Capo** (the "retuner capo," to distinguish it from the chart's own
+  recorded capo below) — clamp a virtual capo on any fret from 1 to (max
+  fret − 1). No capo bar is actually drawn anywhere; this is purely a
+  floor on what's reachable — nothing below the capo's pitch is ever
+  placed on the neck, the same as a real one. One fret = one half-step up
+  per string, and frets above (max fret − capo) fall off the end of the
+  neck too.
 - **Octave offset** — shift the whole chart up or down 1-2 octaves
   before remapping, with no key change. **+1** plays an E-standard bass
   chart on a standard guitar's lowest four strings note-for-note; **-1**
   is the reverse. Save +1 on a cello profile and every bass chart plays
   an octave up by default.
 
-A chart authored with its own native capo (e.g. a guitar arrangement
-recorded with a capo on fret 2) keeps looking exactly like the original —
-open strings stay open, fretted notes keep their original fret numbers —
-whenever the target tuning doesn't otherwise need to reach lower than
-that capo allows. You don't need to manually dial in a matching capo just
-to view or play the chart as authored; the target capo above is for
-layering an *additional* capo of your own on top.
+Every fret this plugin shows — and every open-string name — is the TRUE
+physical position/pitch on the target instrument's own bare neck, never
+relabeled relative to a capo. That applies whether the shift comes from
+the retuner capo above or from the chart's own native recorded capo: both
+fold directly into the physical fret a bare instrument needs, so what's
+on screen always matches what the instrument being played actually
+needs, and a note that would only "ring open" under a real capo is shown
+properly fretted instead.
 
 Both live in two places:
 

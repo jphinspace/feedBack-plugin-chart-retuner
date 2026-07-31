@@ -444,11 +444,6 @@ export function remapChordTemplate(sourceOpenMidiByString, naturalTargetByString
     return Object.assign({}, template, { frets, fingers });
 }
 
-export function remapChordTemplates(sourceOpenMidiByString, naturalTargetByString, templates, targetMidiTuning, maxFret = DEFAULT_MAX_FRET) {
-    if (!Array.isArray(templates)) return templates || [];
-    return templates.map(t => remapChordTemplate(sourceOpenMidiByString, naturalTargetByString, t, targetMidiTuning, maxFret));
-}
-
 // PATCH POINT (chord solver) — exact per-note candidate for a
 // simultaneous-note group, as solver placements: null when any note
 // drops or two collide on one target string (those go to the revoicing
@@ -753,22 +748,33 @@ export function createRetuner(opts) {
         remappedTemplates = newTemplates;
 
         // Physical-fret display shift (target capo). The remap above is
-        // capo-relative (fret r means "r above the capo"); a renderer
-        // numbering its board physically passes the target capo as
-        // displayFretOffset, and every fretted output fret becomes
-        // r + capo. Pure relabeling — sounding pitch is untouched.
+        // capo-relative (fret r means "r above the capo"); the caller
+        // passes the target capo as displayFretOffset, and every output
+        // fret becomes r + capo. Pure relabeling — sounding pitch is
+        // untouched.
         //
-        // Opens (fret 0) stay 0, since an open string rings from the bar
-        // itself and renderers key open-note treatment on f === 0.
-        // Slides shift the same way; anchors are rebuilt as fresh
-        // objects; template frets shift where > 0 and fingers are
-        // unaffected.
+        // No physical capo bar is ever drawn, so nothing "rings open" at
+        // the capo the way it would with a real one on — a note landing
+        // at relative fret 0 is really fretted at the capo's own physical
+        // position and must be shown that way too (feedBack chart-retuner
+        // issue: "fret 0 = the capo" read as broken/confusing, since the
+        // frets on screen should match what the player's bare instrument
+        // actually needs). So the shift applies unconditionally, INCLUDING
+        // r === 0 — there is no "stays open" exception. Slides shift the
+        // same way; anchors are rebuilt as fresh objects; template frets
+        // shift except the -1 "unused string" sentinel; fingers are
+        // unaffected. Notes/anchors that can't reach the capo's floor at
+        // all already dropped or revoiced earlier in this function (via
+        // effectiveTargetMidiTuning/effectiveMaxFret raising the floor and
+        // shrinking the ceiling before any of this runs) — that's the
+        // "no notes below the capo" guardrail; this block only relabels
+        // what already survived it.
         if (displayFretOffset > 0) {
             const off = displayFretOffset;
             const shiftNote = (n) => {
-                if (n.f > 0) n.f += off;
-                if (Number.isInteger(n.sl) && n.sl > 0) n.sl += off;
-                if (Number.isInteger(n.slu) && n.slu > 0) n.slu += off;
+                n.f += off;
+                if (Number.isInteger(n.sl)) n.sl += off;
+                if (Number.isInteger(n.slu)) n.slu += off;
             };
             for (const n of remappedNotes) shiftNote(n);
             for (const ch of remappedChords) {
@@ -778,7 +784,7 @@ export function createRetuner(opts) {
                 a => ({ time: a.time, fret: a.fret + off, width: a.width }));
             remappedTemplates = Array.isArray(remappedTemplates)
                 ? remappedTemplates.map(t => (t && Array.isArray(t.frets))
-                    ? Object.assign({}, t, { frets: t.frets.map(f => (f > 0 ? f + off : f)) })
+                    ? Object.assign({}, t, { frets: t.frets.map(f => (f >= 0 ? f + off : f)) })
                     : t)
                 : remappedTemplates;
         }
@@ -846,79 +852,4 @@ export function createRetuner(opts) {
     }
 
     return { apply, getStats };
-}
-
-// ---- Source-capo pass-through (feedBack chart-retuner) ----------------
-//
-// `apply()` above always outputs the ABSOLUTE physical fret a bare
-// (uncapo'd) target needs to reproduce a note's exact sounding pitch —
-// correct and necessary whenever the source chart's own tuning/capo
-// (bundle.capo, e.g. a guitar recorded with a capo) doesn't line up
-// pitch-for-pitch with the target. But when the retune is effectively a
-// no-op (same tuning, no target capo/octave shift), that absolute-fret
-// output silently bakes the source's OWN capo into every fret number —
-// turning what the chart authored as "open" into "fret 2", "fret 1" into
-// "fret 3", etc. — instead of leaving the chart looking like its
-// untouched, capo-relative self. The two functions below re-express an
-// already-remapped bundle relative to the source's capo when doing so is
-// exact, so a target that adds nothing of its own reproduces the
-// original chart's fret numbers, and the caller folds the same amount
-// into the `capo` value it reports back (mirroring how a chart's own
-// native capo already pairs frets with a separate capo field for every
-// chart-transform consumer).
-//
-// Split in two (check, then mutate) so a caller can decide once from the
-// fuller of two related note sets (e.g. a difficulty-filtered view and
-// its unfiltered counterpart) and force the SAME decision on both —
-// independent per-view decisions could disagree at the margins and leave
-// one view's frets inconsistent with the single `capo` value reported
-// for both.
-
-// True when every fretted value in `bundle` (notes, chord notes, slide
-// endpoints, anchor bands, template frets) sits at or above `sourceCapo`
-// — the precondition for subtracting it back out below. A target whose
-// own tuning/octave choice needs to reach a pitch below what the
-// source's capo allows can't be re-expressed this way; the caller should
-// leave that bundle (and any paired view) as absolute frets.
-export function canFoldSourceCapo(bundle, sourceCapo) {
-    if (!(sourceCapo > 0)) return false;
-    const notes = Array.isArray(bundle.notes) ? bundle.notes : [];
-    const chordNotes = Array.isArray(bundle.chords) ? bundle.chords.flatMap(c => c.notes || []) : [];
-    for (const n of notes.concat(chordNotes)) {
-        if (n.f > 0 && n.f < sourceCapo) return false;
-        if (Number.isInteger(n.sl) && n.sl > 0 && n.sl < sourceCapo) return false;
-        if (Number.isInteger(n.slu) && n.slu > 0 && n.slu < sourceCapo) return false;
-    }
-    const anchors = Array.isArray(bundle.anchors) ? bundle.anchors : [];
-    for (const a of anchors) {
-        if (a.fret < sourceCapo) return false;
-    }
-    const templates = Array.isArray(bundle.chordTemplates) ? bundle.chordTemplates : [];
-    for (const t of templates) {
-        if (Array.isArray(t.frets) && t.frets.some(f => f > 0 && f < sourceCapo)) return false;
-    }
-    return true;
-}
-
-// Subtracts `sourceCapo` from every fretted value in `bundle`, mutating
-// notes/chords/anchors/chordTemplates in place. No safety check of its
-// own — call only after canFoldSourceCapo(bundle, sourceCapo) (on this
-// bundle or a fuller paired one) confirms every value stays >= 0.
-// Opens (fret 0) and unused template slots (-1) are left alone, same
-// convention as the physical-fret-display shift in _remap above; anchor
-// bands shift unconditionally (their own already-uniform convention).
-export function applySourceCapoFold(bundle, sourceCapo) {
-    const notes = Array.isArray(bundle.notes) ? bundle.notes : [];
-    const chordNotes = Array.isArray(bundle.chords) ? bundle.chords.flatMap(c => c.notes || []) : [];
-    for (const n of notes.concat(chordNotes)) {
-        if (n.f > 0) n.f -= sourceCapo;
-        if (Number.isInteger(n.sl) && n.sl > 0) n.sl -= sourceCapo;
-        if (Number.isInteger(n.slu) && n.slu > 0) n.slu -= sourceCapo;
-    }
-    const anchors = Array.isArray(bundle.anchors) ? bundle.anchors : [];
-    for (const a of anchors) a.fret -= sourceCapo;
-    const templates = Array.isArray(bundle.chordTemplates) ? bundle.chordTemplates : [];
-    for (const t of templates) {
-        if (Array.isArray(t.frets)) t.frets = t.frets.map(f => (f > 0 ? f - sourceCapo : f));
-    }
 }

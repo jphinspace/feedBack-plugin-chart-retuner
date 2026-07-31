@@ -17,16 +17,12 @@ const _colorRoleByMidi = new Map(
 // Color role for a note produced by CR.defaultExtensionNote, for a
 // newly added string's default color ('gray' outside the known chain).
 // Note-based rather than position-based, since an added string's only
-// stable identity is its own note (contrast BEADG_COLOR_ROLES below,
-// which IS position-based).
+// stable identity is its own note (unlike the BEADG core positions,
+// whose colors are pinned to string position, not note identity, so an
+// AEADG tuning's position 0 still gets the "low string" role).
 export function colorRoleForNote(midi) {
     return _colorRoleByMidi.get(midi) || 'gray';
 }
-
-// Roles for the 5 BEADG core positions, by index — colors there are
-// pinned to string position, not note identity, so an AEADG tuning's
-// position 0 still gets the "low string" role.
-export const BEADG_COLOR_ROLES = ['lowB', 'e', 'a', 'd', 'g'];
 
 function hexToInt(hex) {
     if (typeof hex !== 'string') return null;
