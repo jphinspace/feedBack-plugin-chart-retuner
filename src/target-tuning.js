@@ -27,13 +27,9 @@ export function isValidMaxFret(v) {
     return MAX_FRET_OPTIONS.indexOf(v) !== -1;
 }
 
-// Retuner capo — a per-tuning-profile fret the player clamps on top of
-// the tuning's own string pitches; frets above (maxFret - capo) fall off
-// the neck. 0 = no capo; negative or >= maxFret is invalid. Called out as
-// "retuner capo" specifically (in code and comments) to keep it distinct
-// from the chart's own SOURCE capo (songInfo.capo, consumed by
-// computeOpenStringMidiByString below) — this one describes the TARGET
-// instrument this plugin is retuning onto, gated by capoEnabled below.
+// Retuner capo — a per-tuning-profile fret clamped on the target
+// instrument, distinct from the chart's own source capo. 0 = no capo;
+// negative or >= maxFret is invalid.
 export function isValidCapo(v, maxFret) {
     return Number.isInteger(v) && v >= 0 && v < (Number.isInteger(maxFret) ? maxFret : DEFAULT_MAX_FRET);
 }
@@ -57,12 +53,8 @@ export function resolveOctaveOffset(v) {
     return isValidOctaveOffset(v) ? v : 0;
 }
 
-// Resolves the retuner capo/capoEnabled/octaveOffset fields off a raw
-// profile-shaped object, against `maxFret` — shared by every place that
-// builds a resolved tuning-profile result (a built-in preset, a saved
-// custom tuning, or the unsaved active tuning) and by screen.js/
-// settings.html when they save or seed one of these profiles, so the
-// three fields can't drift out of sync between all those call sites.
+// Resolves capo/capoEnabled/octaveOffset off a raw profile-shaped object,
+// against `maxFret` — shared by every builder of a resolved tuning profile.
 export function resolveRetunerCapoOctaveFields(raw, maxFret) {
     return {
         capo: resolveCapo(raw.capo, maxFret),
@@ -71,13 +63,8 @@ export function resolveRetunerCapoOctaveFields(raw, maxFret) {
     };
 }
 
-// Merges a per-tuning quick-adjust override ({ capo, capoEnabled, octave })
-// onto an already-resolved tuning profile, in place — shared by screen.js's
-// player-controls widget and settings.html's editor so a retuner-capo
-// override applies identically wherever a profile gets resolved. Invalid or
-// missing override fields leave the profile's own value untouched. Callers
-// pass a profile they already own (a fresh resolve or their own shallow
-// copy), since this mutates it directly rather than returning a new object.
+// Merges a per-tuning override ({ capo, capoEnabled, octave }) onto an
+// already-resolved profile, in place; invalid/missing fields are untouched.
 export function applyRetunerCapoOctaveOverride(profile, override) {
     if (!override || typeof override !== 'object') return profile;
     if (isValidCapo(override.capo, profile.maxFret)) profile.capo = override.capo;

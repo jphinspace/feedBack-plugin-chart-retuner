@@ -389,3 +389,7 @@ window.registerShortcut({
 - If hooking `window.showScreen`, clean up your state when leaving the player screen
 - Use `window.feedBack.emit()` / `window.feedBack.on()` for inter-plugin communication
 - Use `window.registerShortcut()` to add keyboard shortcuts. Clean up with `window.unregisterShortcut(key, scope)` — pass the same scope you registered with, since the default is `'global'` and won't match `player`/`library`/`settings`/`plugin-*` bindings. For panel-scoped shortcuts, prefer `panel.clearShortcuts()`.
+
+### Code comments
+
+Keep comments to 1-2 lines, even for non-obvious rationale. Never reference an issue number, bug report, task, or version tag in a comment — that belongs in the commit message or HISTORY.md, not source. If a comment needs three sentences to explain something, the fix is usually a better name or extracted constant, not a longer comment.

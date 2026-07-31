@@ -1021,16 +1021,10 @@ const SPOT_FRETS = [0, 10, 20];
     assert.notStrictEqual(aliased.colors, aliasIn.colors, 'parsed colors must be a fresh copy'); passed++;
 }
 
-// displayFretOffset: physical-fret display shift (capo marker follow-up).
-// The remap stays capo-relative internally; the offset relabels EVERY
-// output (notes, slide endpoints, chord notes, template frets, anchors) to
-// physical frets — INCLUDING what would otherwise read as an open string at
-// relative fret 0, since no capo bar is ever drawn to actually ring it open
-// (feedBack chart-retuner: "fret 0 = the capo" read as broken/confusing).
-// Invariant exercised throughout: remapping a same-tuning source against its
-// own capo-shifted pitches (effective = open + capo, ceiling = maxFret −
-// capo, offset = capo) must return every playable note at its ORIGINAL
-// physical fret.
+// displayFretOffset: physical-fret display shift. The remap stays
+// capo-relative internally; the offset relabels EVERY output (notes,
+// slides, chord notes, template frets, anchors) to physical frets,
+// including relative fret 0 (no capo bar rings it open unconditionally).
 {
     const { createRetuner } = CR;
     const capo = 3;
@@ -1083,13 +1077,8 @@ const SPOT_FRETS = [0, 10, 20];
         bundle.notes.map(n => n.f), [2, 0, 4]);
 }
 
-// displayFretOffset: sl/slu are always-present fields on a raw note, not
-// omitted when there's no slide — a plain (non-sliding) note carries them as
-// -1, the same "not applicable" sentinel remapNoteEntry's own hasSl/hasSlu
-// checks already treat as "no slide" (feedBack chart-retuner: shifting -1
-// unconditionally fabricated a positive slide destination on every single
-// note, which the highway then drew as a slide arrow on notes that were
-// never sliding — regression coverage for that bug).
+// displayFretOffset: a plain note's sl/slu carry the -1 "no slide"
+// sentinel (never omitted), which must stay untouched by the shift.
 {
     const { createRetuner } = CR;
     const capo = 5;
@@ -1626,15 +1615,8 @@ const SPOT_FRETS = [0, 10, 20];
     }
 }
 
-// Source capo bakes into absolute pitch, always (feedBack chart-retuner
-// Wonderwall Rhythm/E-Standard report): a chart authored with its OWN native
-// capo (bundle.capo, e.g. songInfo.capo=2) must reproduce the correct SOUNDING
-// pitch on a bare target with no relabeling trick — the physical fret needed
-// on an uncapo'd neck, full stop — never redisplayed as the chart's own
-// smaller, capo-relative numbers. That keeps notes, chords, and anchors
-// consistent with each other (they all derive from the same adjustment) AND
-// consistent with plain, uncapo'd open-string tuning names (nothing here
-// claims a note is "open" when it truly isn't, on a bare neck).
+// A chart's own native capo (bundle.capo) always bakes into the physical
+// fret a bare target needs — never redisplayed as smaller relative numbers.
 {
     const { createRetuner } = CR;
     const eadgbe = resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']);
@@ -1662,12 +1644,9 @@ const SPOT_FRETS = [0, 10, 20];
         bundle.anchors, [{ time: 0, fret: 2, width: 3 }]);
 }
 
-// Anchor donors include chord notes, not just standalone ones (feedBack
-// chart-retuner report: a chord-only passage — a strummed rhythm part with
-// no nearby single notes, e.g. Wonderwall's verse — left the anchor at the
-// chart's raw, un-retuned position while the chord around it retuned
-// normally, since remapAnchors previously only ever saw standalone notes).
-// End-to-end via createRetuner, the same path screen.js's _transform() uses.
+// Anchor donors include chord notes, not just standalone ones — a
+// chord-only passage must still retune its anchor. End-to-end via
+// createRetuner, the same path screen.js's _transform() uses.
 {
     const { createRetuner } = CR;
     const eadgbe = resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']);
@@ -1695,6 +1674,33 @@ const SPOT_FRETS = [0, 10, 20];
         bundle.anchors[0].fret, Math.min(...chordFrets));
     assert.notStrictEqual(bundle.anchors[0].fret, rawAnchors[0].fret,
         'the anchor must not be left at its un-retuned original fret when the only nearby donor is a chord'); passed++;
+}
+
+// Chord notes with no `.t` of their own (the real chart shape) must still
+// let remapAnchors walk them in time order — two far-apart, revoiced
+// chords must produce two anchors, not one stuck at the first.
+{
+    const { createRetuner } = CR;
+    const eadgbe = resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']);
+    const chordNoTime = (s, f) => ({ s, f }); // no `.t` -- matches the real chart schema
+    const rawChords = [
+        { id: null, t: 0, notes: [1, 2, 3].map(s => chordNoTime(s, 2)).concat([chordNoTime(4, 0)]) },
+        { id: null, t: 2, notes: [0, 1, 2, 4].map(s => chordNoTime(s, 5)) },
+    ];
+    const bundle = {
+        notes: [],
+        chords: rawChords.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) })),
+        anchors: [{ time: 0, fret: 0, width: 3 }],
+        chordTemplates: [],
+        tuning: [0, 0, 0, 0, 0, 0], capo: 2, stringCount: 6,
+    };
+    createRetuner().apply(bundle, eadgbe.midiTuning, 24);
+    check('chord notes come back with a real .t (stamped from their parent chord), not undefined',
+        bundle.chords.map(c => c.notes.every(n => n.t === c.t)), [true, true]);
+    check('two chords far apart in position produce two distinct anchors, not one stuck at the first',
+        bundle.anchors.length > 1, true);
+    check('the second anchor is timed at the second chord, not left at t=0',
+        bundle.anchors[bundle.anchors.length - 1].time > 0, true);
 }
 
 // Octave-offset identity: an E-standard bass chart with a +1 octave

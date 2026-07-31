@@ -196,30 +196,17 @@ import { CR } from './src/chart-retune.js';
         return base.slice();
     }
 
-    // One retuner per view (difficulty-filtered vs. the full unfiltered
-    // chart), created once and reused across every _transform() call —
-    // createRetuner()'s own cache (keyed on the raw note/chord/anchor/
-    // template array identities + tuning + capo) only pays off when the
-    // SAME instance sees repeated calls; a fresh instance starts cold
-    // every time. Two instances, not one: the filtered and all views see
-    // DIFFERENT note arrays on every call, so sharing one would have each
-    // view's call evict the other's cache entry and neither would ever
-    // hit. _transform() can run many times per second while the mastery
-    // or retuner-capo/octave sliders are dragged (see its own comment) —
-    // this is the difference between a full re-solve and a cache hit on
-    // every one of those ticks.
+    // One retuner per view (filtered vs. all), reused across calls so
+    // createRetuner()'s own cache actually hits instead of starting cold
+    // every _transform(). Two instances since the two views' note arrays
+    // differ, so sharing one would just evict the other's cache entry.
     const _crFilteredRetuner = CR.createRetuner();
     const _crAllRetuner = CR.createRetuner();
 
-    // Runs the remap engine over one notes/chords/anchors/templates view. sourceTuning/
-    // sourceCapo/sourceStringCount describe the CHART's own tuning (untouched by this
-    // plugin); targetMidiTuning/maxFret already fold in this plugin's own retuner
-    // capo, if enabled. retunerCapo is passed straight through as the engine's
-    // physical-fret display shift, so every fret/anchor/chord/template this returns
-    // is a TRUE physical fret on the target's own bare neck — never relabeled
-    // relative to the retuner capo OR the chart's native one (no capo bar is ever
-    // drawn, so nothing should read as "fret 0 = the capo"; see _transform()'s
-    // comment). `retuner` is one of the two reused instances above.
+    // sourceTuning/sourceCapo/sourceStringCount describe the chart's own
+    // tuning; targetMidiTuning/maxFret fold in this plugin's retuner capo.
+    // retunerCapo is the engine's physical-fret display shift (see
+    // _transform() below for why frets are always physical).
     function _applyRetune(retuner, notes, chords, anchors, chordTemplates, sourceTuning, sourceCapo, sourceStringCount, targetMidiTuning, maxFret, retunerCapo) {
         const bundle = {
             notes, chords, anchors: anchors || [], chordTemplates,
@@ -243,19 +230,9 @@ import { CR } from './src/chart-retune.js';
 
         const active = _resolveActiveTuning(arrClass);
         const target = CR.resolveTargetTuning(active.strings);
-        // This plugin's own "retuner capo" — separate from whatever capo the
-        // chart's source used (that still feeds sourceCapo into _applyRetune
-        // below); named explicitly so it's never confused with the chart's own
-        // capo in code that touches both. Purely a floor/ceiling constraint on
-        // what's reachable ("no notes below the capo," enforced by
-        // effectiveTargetMidiTuning raising the floor and effectiveMaxFret
-        // shrinking the ceiling below) — no capo bar is ever drawn, so every
-        // fret this plugin hands back is a TRUE PHYSICAL fret on the target's
-        // bare neck (the chart's own native capo gets folded in the same way,
-        // via sourceCapo below), never relabeled relative to either capo. A
-        // player reading the highway should see exactly what their own
-        // instrument needs, with nothing below the (invisible) capo ever
-        // appearing.
+        // This plugin's own capo, distinct from the chart's native one
+        // (sourceCapo below) — a floor/ceiling constraint only; every fret
+        // returned is a true physical fret, never relabeled to either capo.
         const retunerCapo = active.capoEnabled ? active.capo : 0;
         const remapMidiTuning = (retunerCapo === 0 && active.octaveOffset === 0)
             ? target.midiTuning
@@ -282,10 +259,7 @@ import { CR } from './src/chart-retune.js';
             chordTemplates: filtered.chordTemplates,
             stringCount: n,
             tuning: tuningOffsets,
-            // Every fret above is already physical (the retuner capo and
-            // the chart's native one are both baked directly into the fret
-            // number, never left as a separate relative term), so there's
-            // nothing left for a consumer to add back.
+            // Every fret above is already physical, so there's no capo left to report.
             capo: 0,
         };
     }
@@ -384,13 +358,8 @@ import { CR } from './src/chart-retune.js';
         _crEls.octSlider.value = String(t.octaveOffset);
         _crEls.octVal.textContent = (t.octaveOffset > 0 ? '+' : '') + t.octaveOffset;
     }
-    // Persists a retuner-capo/octave change for tuning `t` (the currently
-    // resolved profile) — the unsaved active tuning writes through
-    // _writeActiveTuning (its own whole-form blob); any real saved profile
-    // (built-in or custom) writes a per-tuning quick-adjust override instead,
-    // so the change doesn't leak onto a different tuning. Shared by the Capo
-    // pill toggle and the fret/octave slider commit below, which differ only
-    // in which of these three fields actually changed.
+    // Persists a retuner-capo/octave change: the unsaved active tuning
+    // writes through _writeActiveTuning, a saved profile via its override.
     function _writeRetunerCapoOctave(t, retunerCapo, retunerCapoEnabled, octaveOffset) {
         if (t.id === CR.ACTIVE_TUNING_ID) {
             _writeActiveTuning({ strings: t.strings, colors: t.colors, maxFret: t.maxFret, capo: retunerCapo, capoEnabled: retunerCapoEnabled, octaveOffset });

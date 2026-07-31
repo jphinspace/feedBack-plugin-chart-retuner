@@ -14,17 +14,12 @@ import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES }
 
 const _clampFret = (f, maxFret) => Math.max(0, Math.min(maxFret, f));
 
-// A fret-shaped field's "not applicable" sentinel — a slide-less note's own
-// sl/slu, or an unused string slot in a chord template's frets array —
-// isn't a literal value this file checks for; it's defined by what a REAL
-// fret looks like (a non-negative integer). Anything else, whatever an
-// upstream chart format uses for "not applicable" today or in the future,
-// reads as not-applicable without this file hardcoding that value anywhere.
+// A real fret is a non-negative integer; anything else (e.g. -1) means
+// "not applicable" for a sl/slu field or a template's per-string slot.
 const _isRealFret = (v) => Number.isInteger(v) && v >= 0;
 
-// A note's real slide destination and which field it's carried in — sl
-// takes precedence when a note somehow has both, matching every one of
-// this file's slide checks. Null when the note isn't sliding at all.
+// A note's slide destination and which field carries it (sl wins if both
+// are set); null if it isn't sliding.
 function _slideTarget(note) {
     if (_isRealFret(note.sl)) return { field: 'sl', to: note.sl };
     if (_isRealFret(note.slu)) return { field: 'slu', to: note.slu };
@@ -196,12 +191,11 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET)
     const fretted = remappedNotes.filter(n => n._origNote.f > 0);
     const donors = fretted.length ? fretted : remappedNotes;
     const revoicedOf = n => n._crRevoiced === true;
-    // Widen/split candidates: every target-fretted note, whether or not
-    // it started open in the source (a differential per-string retune
-    // can strand an already-fretted note outside the donor band too).
-    // Revoiced notes are excluded — their fret can be a nonsense
-    // pitch-solver artifact, not a real hand-position destination.
-    const targetFretted = remappedNotes.filter(n => n.f > 0 && !revoicedOf(n));
+    // Revoiced is only untrustworthy for hand-position purposes above
+    // degradeLevel 0 (notes actually dropped, not just refingered).
+    const untrustworthy = n => revoicedOf(n) && n._crDegradeLevel !== 0;
+    // Widen/split candidates: every target-fretted, trustworthy note.
+    const targetFretted = remappedNotes.filter(n => n.f > 0 && !untrustworthy(n));
     const out = [];
     let ptr = 0;
     let cPtr = 0;
@@ -485,9 +479,9 @@ function _exactCandidateFor(sourceOpenMidiByString, naturalTargetByString, notes
 // remapped slide endpoints); revoiced placements re-apply the source
 // note's slide delta to the solved fret instead.
 //
-// `revoiced` (optional) is tagged onto each copy as `_crRevoiced`, for
-// remapAnchors' donor preference; omitted, a copy reads as not revoiced.
-function _materializePlacements(notes, placements, maxFret, revoiced) {
+// `revoiced`/`degradeLevel` (both optional) tag onto each copy as
+// `_crRevoiced`/`_crDegradeLevel`, for remapAnchors' donor preference.
+function _materializePlacements(notes, placements, maxFret, revoiced, degradeLevel) {
     const out = [];
     for (const pl of placements) {
         const src = notes[pl.srcIndex];
@@ -500,6 +494,7 @@ function _materializePlacements(notes, placements, maxFret, revoiced) {
         }
         copy._origNote = src;
         if (revoiced !== undefined) copy._crRevoiced = revoiced;
+        if (degradeLevel !== undefined) copy._crDegradeLevel = degradeLevel;
         out.push(copy);
     }
     return out;
@@ -607,6 +602,8 @@ export function createRetuner(opts) {
         // screen.js builds from bundle.chordTemplates follow the SAME
         // solved voicing (chordTemplates is indexed by chord id).
         const templateSolutions = new Map(); // template index -> Map<sourceString, {s,f}>
+        const templateRevoiced = new Map(); // template index -> bool, for chord instances taking the shortcut below
+        const templateDegradeLevel = new Map(); // template index -> number, ditto
         const remapOneTemplate = (template, ti) => {
             if (!template || !Array.isArray(template.frets)) return template;
             const tNotes = [];
@@ -634,6 +631,8 @@ export function createRetuner(opts) {
                 frets[pl.s] = pl.f;
             }
             templateSolutions.set(ti, byString);
+            templateRevoiced.set(ti, solved.revoiced);
+            templateDegradeLevel.set(ti, solved.degradeLevel);
             // Fingers: an omitted (non-array) finger chart stays omitted.
             // Otherwise an exact placement carries the chart's own
             // per-string fingering, unless the remap crossed the
@@ -689,7 +688,7 @@ export function createRetuner(opts) {
                 checkDeadline();
                 if (bucket.length >= 2) {
                     const solved = _solveGroup(groupCache, sourceOpenMidiByString, naturalTargetByString, bucket, target, null, maxFret, ctl);
-                    if (solved) newNotes.push(..._materializePlacements(bucket, solved.placements, maxFret, solved.revoiced));
+                    if (solved) newNotes.push(..._materializePlacements(bucket, solved.placements, maxFret, solved.revoiced, solved.degradeLevel));
                 } else {
                     const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, bucket, target, maxFret);
                     for (const { entry, note } of survivors) {
@@ -711,6 +710,7 @@ export function createRetuner(opts) {
                 const chNotes = ch.notes || [];
                 let placements = null;
                 let revoiced = false;
+                let degradeLevel = 0;
                 // Template-first: an instance whose notes match its
                 // template's frets (even a difficulty-filtered subset)
                 // takes the template's solved voicing, so every
@@ -743,65 +743,40 @@ export function createRetuner(opts) {
                         const t = byString.get(n.s);
                         placements.push({ srcIndex: i, s: t.s, f: t.f });
                     }
+                    // Inherit the template's own revoiced status.
+                    revoiced = templateRevoiced.get(cid) || false;
+                    degradeLevel = templateDegradeLevel.get(cid) || 0;
                 } else if (chNotes.length >= 2) {
                     const solved = _solveGroup(groupCache, sourceOpenMidiByString, naturalTargetByString, chNotes, target,
                         tmpl ? (tmpl.displayName || tmpl.name) : null, maxFret, ctl);
                     placements = solved ? solved.placements : null;
                     revoiced = solved ? solved.revoiced : false;
+                    degradeLevel = solved ? solved.degradeLevel : 0;
                 } else {
                     const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, chNotes, target, maxFret);
                     placements = survivors.map(({ entry, note }) => ({ srcIndex: chNotes.indexOf(note), s: entry.s, f: entry.f, entry }));
                 }
                 if (placements && placements.length > 0) {
-                    newChords.push(Object.assign({}, ch, { notes: _materializePlacements(chNotes, placements, maxFret, revoiced) }));
+                    const materialized = _materializePlacements(chNotes, placements, maxFret, revoiced, degradeLevel);
+                    // Raw chord notes have no `.t` of their own; remapAnchors needs one.
+                    for (const n of materialized) { if (n.t !== ch.t) n.t = ch.t; }
+                    newChords.push(Object.assign({}, ch, { notes: materialized }));
                 }
             }
         }
         remappedNotes = newNotes;
         remappedChords = newChords;
-        // Anchor donors: standalone notes AND chord notes, time-sorted —
-        // remapAnchors only ever saw newNotes before, so a passage that's
-        // entirely chords (a strummed rhythm part with no nearby single
-        // notes, e.g. Wonderwall's verse) had NO donor at all and fell back
-        // to the chart's raw, un-retuned anchor position while the chords
-        // around it retuned normally — the two visibly disagreeing is
-        // exactly that bug. Chord notes carry the same _origNote/optional
-        // _crRevoiced shape standalone notes do (via _materializePlacements
-        // above), so they're valid donors without remapAnchors itself
-        // needing to know chords exist.
+        // Anchor donors: standalone AND chord notes, time-sorted, so a
+        // chord-only passage still has something for remapAnchors to track.
         const anchorDonors = newChords.length
             ? newNotes.concat(newChords.flatMap(c => c.notes)).sort((a, b) => a.t - b.t)
             : newNotes;
         remappedAnchors = remapAnchors(rawAnchors, anchorDonors, maxFret);
         remappedTemplates = newTemplates;
 
-        // Physical-fret display shift (target capo). The remap above is
-        // capo-relative (fret r means "r above the capo"); the caller
-        // passes the target capo as displayFretOffset, and every output
-        // fret becomes r + capo. Pure relabeling — sounding pitch is
-        // untouched.
-        //
-        // No physical capo bar is ever drawn, so nothing "rings open" at
-        // the capo the way it would with a real one on — a note landing
-        // at relative fret 0 is really fretted at the capo's own physical
-        // position and must be shown that way too (feedBack chart-retuner
-        // issue: "fret 0 = the capo" read as broken/confusing, since the
-        // frets on screen should match what the player's bare instrument
-        // actually needs). So the shift applies unconditionally, INCLUDING
-        // r === 0 — there is no "stays open" exception. Slides shift the
-        // same way (sl/slu are always-present fields, not omitted when
-        // there's no slide, so shifting them unconditionally would turn
-        // "not applicable" into a fabricated slide destination — that's
-        // what _isRealFret/_slideTarget above guard against, without this
-        // block hardcoding whatever sentinel value that "not applicable"
-        // happens to be today); anchors are rebuilt as fresh objects;
-        // template frets shift the same way, for the same reason; fingers
-        // are unaffected. Notes/anchors that can't reach the capo's floor
-        // at all already dropped or revoiced earlier in this function (via
-        // effectiveTargetMidiTuning/effectiveMaxFret raising the floor and
-        // shrinking the ceiling before any of this runs) — that's the
-        // "no notes below the capo" guardrail; this block only relabels
-        // what already survived it.
+        // Physical-fret display shift: every output fret becomes r + capo,
+        // unconditionally (no capo bar is drawn, so r === 0 isn't "open").
+        // _isRealFret guards sl/slu/template sentinels from the same shift.
         if (displayFretOffset > 0) {
             const off = displayFretOffset;
             const shiftNote = (n) => {
