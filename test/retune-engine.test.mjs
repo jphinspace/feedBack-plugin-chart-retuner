@@ -1662,6 +1662,41 @@ const SPOT_FRETS = [0, 10, 20];
         bundle.anchors, [{ time: 0, fret: 2, width: 3 }]);
 }
 
+// Anchor donors include chord notes, not just standalone ones (feedBack
+// chart-retuner report: a chord-only passage — a strummed rhythm part with
+// no nearby single notes, e.g. Wonderwall's verse — left the anchor at the
+// chart's raw, un-retuned position while the chord around it retuned
+// normally, since remapAnchors previously only ever saw standalone notes).
+// End-to-end via createRetuner, the same path screen.js's _transform() uses.
+{
+    const { createRetuner } = CR;
+    const eadgbe = resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']);
+    const sourceTuning = [0, 0, 0, 0, 0, 0];
+    // No standalone notes at all -- only a chord, matching a pure rhythm-
+    // strum passage. sourceCapo=2 so a real shift is actually exercised.
+    const rawChords = [{ id: null, t: 0, notes: [
+        { t: 0, s: 1, f: 2 }, { t: 0, s: 2, f: 2 }, { t: 0, s: 3, f: 2 }, { t: 0, s: 4, f: 0 },
+    ] }];
+    // Deliberately NOT one of the chord's own retuned frets (4/4/4/2 below),
+    // so a stray "left at the raw fret" bug can't coincidentally pass.
+    const rawAnchors = [{ time: 0, fret: 0, width: 3 }];
+    const bundle = {
+        notes: [],
+        chords: rawChords.map(c => ({ ...c, notes: c.notes.map(n => ({ ...n })) })),
+        anchors: rawAnchors.map(a => ({ ...a })),
+        chordTemplates: [],
+        tuning: sourceTuning, capo: 2, stringCount: 6,
+    };
+    createRetuner().apply(bundle, eadgbe.midiTuning, 24);
+    const chordFrets = bundle.chords[0].notes.map(n => n.f);
+    check('chord-only passage: chord notes still retune (sanity check before the anchor assertion)',
+        chordFrets, [4, 4, 4, 2]);
+    check('chord-only passage: the anchor tracks the chord\'s own retuned position instead of staying at the raw chart fret',
+        bundle.anchors[0].fret, Math.min(...chordFrets));
+    assert.notStrictEqual(bundle.anchors[0].fret, rawAnchors[0].fret,
+        'the anchor must not be left at its un-retuned original fret when the only nearby donor is a chord'); passed++;
+}
+
 // Octave-offset identity: an E-standard bass chart with a +1 octave
 // offset lands on a standard guitar's lowest four strings (E2 A2 D3 G3)
 // note-for-note; the reverse (-1 octave) puts a guitar chart's low-four-

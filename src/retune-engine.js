@@ -710,6 +710,7 @@ export function createRetuner(opts) {
                 checkDeadline();
                 const chNotes = ch.notes || [];
                 let placements = null;
+                let revoiced = false;
                 // Template-first: an instance whose notes match its
                 // template's frets (even a difficulty-filtered subset)
                 // takes the template's solved voicing, so every
@@ -746,18 +747,32 @@ export function createRetuner(opts) {
                     const solved = _solveGroup(groupCache, sourceOpenMidiByString, naturalTargetByString, chNotes, target,
                         tmpl ? (tmpl.displayName || tmpl.name) : null, maxFret, ctl);
                     placements = solved ? solved.placements : null;
+                    revoiced = solved ? solved.revoiced : false;
                 } else {
                     const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, chNotes, target, maxFret);
                     placements = survivors.map(({ entry, note }) => ({ srcIndex: chNotes.indexOf(note), s: entry.s, f: entry.f, entry }));
                 }
                 if (placements && placements.length > 0) {
-                    newChords.push(Object.assign({}, ch, { notes: _materializePlacements(chNotes, placements, maxFret) }));
+                    newChords.push(Object.assign({}, ch, { notes: _materializePlacements(chNotes, placements, maxFret, revoiced) }));
                 }
             }
         }
         remappedNotes = newNotes;
         remappedChords = newChords;
-        remappedAnchors = remapAnchors(rawAnchors, newNotes, maxFret);
+        // Anchor donors: standalone notes AND chord notes, time-sorted —
+        // remapAnchors only ever saw newNotes before, so a passage that's
+        // entirely chords (a strummed rhythm part with no nearby single
+        // notes, e.g. Wonderwall's verse) had NO donor at all and fell back
+        // to the chart's raw, un-retuned anchor position while the chords
+        // around it retuned normally — the two visibly disagreeing is
+        // exactly that bug. Chord notes carry the same _origNote/optional
+        // _crRevoiced shape standalone notes do (via _materializePlacements
+        // above), so they're valid donors without remapAnchors itself
+        // needing to know chords exist.
+        const anchorDonors = newChords.length
+            ? newNotes.concat(newChords.flatMap(c => c.notes)).sort((a, b) => a.t - b.t)
+            : newNotes;
+        remappedAnchors = remapAnchors(rawAnchors, anchorDonors, maxFret);
         remappedTemplates = newTemplates;
 
         // Physical-fret display shift (target capo). The remap above is
