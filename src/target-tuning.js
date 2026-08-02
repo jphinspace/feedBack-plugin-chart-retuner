@@ -81,7 +81,8 @@ export function applyRetunerCapoOctaveOverride(profile, override) {
 // the target rather than the chart. Callers pair this with
 // effectiveMaxFret below.
 export function effectiveTargetMidiTuning(midiTuning, capo, octaveOffset) {
-    const c = capo | 0, oct = octaveOffset | 0;
+    const c = capo | 0;
+    const oct = octaveOffset | 0;
     return midiTuning.map(m => m + c - SEMITONES_PER_OCTAVE * oct);
 }
 // Frets remaining above the capo. capo is validated < maxFret, so this
@@ -379,7 +380,7 @@ export function resolveTargetTuning(spec) {
     const n = src.length;
     const midiTuning = new Array(n);
     const labels = new Array(n);
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n; i += 1) {
         const fallbackSpec = i < DEFAULT_TARGET_TUNING.length
             ? DEFAULT_TARGET_TUNING[i]
             : EXTENDED_DEFAULT_TARGET_TUNING[EXTENDED_CORE_INDEX + i];
@@ -423,7 +424,7 @@ export function sourceOpenStringMidi(sourceStringCount, tuningOffsets, capo, s) 
 
 export function computeOpenStringMidiByString(sourceStringCount, tuningOffsets, capo) {
     const midiByString = [];
-    for (let s = 0; s < sourceStringCount; s++) {
+    for (let s = 0; s < sourceStringCount; s += 1) {
         midiByString.push(sourceOpenStringMidi(sourceStringCount, tuningOffsets, capo, s));
     }
     return midiByString;
@@ -436,18 +437,22 @@ export function computeOpenStringMidiByString(sourceStringCount, tuningOffsets, 
 export function computeArrangementShift(sourceStringCount, tuningOffsets, capo, sourceOpenMidiByString, targetMidiTuning) {
     const midiByString = sourceOpenMidiByString || computeOpenStringMidiByString(sourceStringCount, tuningOffsets, capo);
     const target = targetMidiTuning || DEFAULT_TARGET_MIDI_TUNING;
-    let bestK = 0, bestExact = -1, bestTotalAbs = Infinity;
-    for (let k = 1 - sourceStringCount; k <= target.length - 1; k++) {
-        let exact = 0, totalAbs = 0, counted = 0;
-        for (let s = 0; s < sourceStringCount; s++) {
+    let bestK = 0;
+    let bestExact = -1;
+    let bestTotalAbs = Infinity;
+    for (let k = 1 - sourceStringCount; k <= target.length - 1; k += 1) {
+        let exact = 0;
+        let totalAbs = 0;
+        let counted = 0;
+        for (let s = 0; s < sourceStringCount; s += 1) {
             const j = s + k;
             if (j < 0 || j >= target.length) continue;
             const midi = midiByString[s];
             if (midi === null) continue;
             const adjustment = midi - target[j];
-            counted++;
+            counted += 1;
             totalAbs += Math.abs(adjustment);
-            if (adjustment === 0) exact++;
+            if (adjustment === 0) exact += 1;
         }
         if (counted === 0) continue;
         if (exact > bestExact

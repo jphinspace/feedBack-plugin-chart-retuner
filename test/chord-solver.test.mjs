@@ -268,8 +268,8 @@ test('createRetuner: E-standard chart on EADGBE target is the identity', () => {
     assert.deepStrictEqual(bundle.chordTemplates[0].frets, [-1, 3, 2, 0, 1, 0]);
     assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [-1, 3, 2, 0, 1, 0]);
     assert.deepStrictEqual(bundle.chords[0].t, 1);
-    assert.ok(bundle.chords[0].notes.every(n => chord.notes.includes(n._origNote)),
-        'identity apply: every note keeps an _origNote reference into the raw chord');
+    assert.ok(bundle.chords[0].notes.every(n => chord.notes.includes(n.origNote)),
+        'identity apply: every note keeps an origNote reference into the raw chord');
 });
 
 // E-standard open E (022100) onto a Drop-D target: the exact candidate
@@ -315,13 +315,13 @@ test('createRetuner: Eb-standard chart on E-standard target', () => {
     assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[1, 1], [2, 1], [3, 0], [4, 4]]));
     assert.deepStrictEqual(bundle.chordTemplates[0].frets, [-1, 1, 1, 0, 4, -1]);
     assert.deepStrictEqual(sf(bundle.chords[1].notes), v([[1, 1], [2, 1]]));
-    assert.ok(bundle.chords[1].notes.every(n => subset.notes.includes(n._origNote)),
+    assert.ok(bundle.chords[1].notes.every(n => subset.notes.includes(n.origNote)),
         'Eb->E apply: subset notes reference their own raw notes');
 });
 
 // Drop-D chart's flat-note D5 bucket (three same-onset notes) on an
 // E-standard target: the below-range D2 drops, A2/D3 survive as opens —
-// and _origNote references point into the raw arrays.
+// and origNote references point into the raw arrays.
 test('createRetuner: Drop-D flat-note D5 bucket onto E-standard', () => {
     const retuner = CR.createRetuner();
     const rawNotes = [{ t: 0, s: 0, f: 0 }, { t: 0, s: 1, f: 0 }, { t: 0, s: 2, f: 0 }, { t: 1, s: 2, f: 5 }];
@@ -330,8 +330,8 @@ test('createRetuner: Drop-D flat-note D5 bucket onto E-standard', () => {
     const atZero = bundle.notes.filter(n => n.t === 0);
     assert.deepStrictEqual(sf(atZero), v([[1, 0], [2, 0]]));
     assert.deepStrictEqual(sf(bundle.notes.filter(n => n.t === 1)), v([[2, 5]]));
-    assert.ok(bundle.notes.every(n => rawNotes.includes(n._origNote)),
-        'DropD D5 bucket: _origNote references the raw source notes');
+    assert.ok(bundle.notes.every(n => rawNotes.includes(n.origNote)),
+        'DropD D5 bucket: origNote references the raw source notes');
 });
 
 test('createRetuner: chord slide on a revoiced chord', () => {
@@ -349,7 +349,7 @@ test('createRetuner: chord slide on a revoiced chord', () => {
 // Bass regression through apply(): a clean simultaneous pair on the
 // default BEADG target behaves exactly as the pre-solver engine (the
 // exact candidate == the per-note remap), keeping techniques and
-// _origNote wiring.
+// origNote wiring.
 test('createRetuner: bass regression, clean pair on default BEADG', () => {
     const retuner = CR.createRetuner();
     const rawNotes = [{ t: 0, s: 1, f: 2, sus: 0.5 }, { t: 0, s: 2, f: 0 }];
@@ -360,7 +360,7 @@ test('createRetuner: bass regression, clean pair on default BEADG', () => {
     retuner.apply(bundle); // default BEADG-shaped target, k = +1
     assert.deepStrictEqual(sf(bundle.notes), v([[2, 2], [3, 0]]));
     assert.deepStrictEqual(bundle.notes.find(n => n.s === 2).sus, 0.5);
-    assert.ok(bundle.notes.every(n => rawNotes.includes(n._origNote)), 'bass double-stop: _origNote wired');
+    assert.ok(bundle.notes.every(n => rawNotes.includes(n.origNote)), 'bass double-stop: origNote wired');
 });
 
 // Bass improvement pin (behavior change vs the pre-solver engine,
@@ -493,6 +493,11 @@ test('computeChordFingers', () => {
     assert.deepStrictEqual(computeChordFingers([0, 0, -1]), [0, 0, -1]);
     // Drop-D F shape: min-fret barre (1s) + 3-3-3 needs run grouping.
     assert.deepStrictEqual(computeChordFingers([3, 3, 3, 2, 1, 1]), [3, 3, 3, 2, 1, 1]);
+    // Five distinct, non-adjacent-or-shared frets: no barre (no fret shared
+    // by 2+ strings) and no mini-barre run collapses any pair, so 5 runs
+    // still need more fingers than MAX_FRETTING_FINGERS (4) — ambiguous,
+    // every fretted string returns -1.
+    assert.deepStrictEqual(computeChordFingers([1, 2, 3, 4, 5, -1]), [-1, -1, -1, -1, -1, -1]);
 });
 
 // Node budget (MAX_SEARCH_NODES / opts.budget) — the pathological-chart

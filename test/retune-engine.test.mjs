@@ -50,6 +50,7 @@ const {
     intToHex,
     LIGHT_GRAY_COLOR,
     resolveColorsArray,
+    lowBColor,
 } = CR;
 
 // Mirrors what createRetuner().apply() does once per song: compute k, then
@@ -273,8 +274,8 @@ test('chord collision: lower pitch survives', () => {
 // Anchor remapping. Open-string notes are excluded as donors.
 test('anchor remapping excludes open-string donors', () => {
     const remappedNotes = [
-        { t: 0, f: 4, _origNote: { t: 0, f: 1 } },
-        { t: 1, f: 5, _origNote: { t: 1, f: 7 } },
+        { t: 0, f: 4, origNote: { t: 0, f: 1 } },
+        { t: 1, f: 5, origNote: { t: 1, f: 7 } },
     ];
     const anchors = [
         { time: 0, fret: 1, width: 4 },
@@ -286,18 +287,18 @@ test('anchor remapping excludes open-string donors', () => {
     assert.deepStrictEqual(remapped[1], { time: 1, fret: 5, width: 4 });
     assert.deepStrictEqual(remapped[2], { time: 5, fret: 8, width: 4 });
 
-    const clampLow = remapAnchors([{ time: 0, fret: 0, width: 4 }], [{ t: 0, f: 0, _origNote: { t: 0, f: 3 } }]);
+    const clampLow = remapAnchors([{ time: 0, fret: 0, width: 4 }], [{ t: 0, f: 0, origNote: { t: 0, f: 3 } }]);
     assert.deepStrictEqual(clampLow[0], { time: 0, fret: 0, width: 4 });
-    const clampHigh = remapAnchors([{ time: 0, fret: DEFAULT_MAX_FRET - 1, width: 4 }], [{ t: 0, f: DEFAULT_MAX_FRET, _origNote: { t: 0, f: 0 } }]);
+    const clampHigh = remapAnchors([{ time: 0, fret: DEFAULT_MAX_FRET - 1, width: 4 }], [{ t: 0, f: DEFAULT_MAX_FRET, origNote: { t: 0, f: 0 } }]);
     assert.deepStrictEqual(clampHigh[0], { time: 0, fret: DEFAULT_MAX_FRET, width: 4 });
 
     const passthrough = remapAnchors([{ time: 0, fret: 5, width: 4 }], []);
     assert.deepStrictEqual(passthrough[0], { time: 0, fret: 5, width: 4 });
 
     const openDonorNotes = [
-        { t: 0, f: 3, _origNote: { t: 0, f: 4 } },
-        { t: 1, f: 4, _origNote: { t: 1, f: 0 } },
-        { t: 2, f: 6, _origNote: { t: 2, f: 7 } },
+        { t: 0, f: 3, origNote: { t: 0, f: 4 } },
+        { t: 1, f: 4, origNote: { t: 1, f: 0 } },
+        { t: 2, f: 6, origNote: { t: 2, f: 7 } },
     ];
     const openDonorAnchors = [
         { time: 0, fret: 3, width: 4 },
@@ -337,13 +338,13 @@ test('anchor widening: modest widen, clean split, or single wide band', () => {
     // Tier 1: modest widening (within the cap) still works in both
     // directions.
     assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 4, width: 4 }], [
-            { t: 1, f: 3, _origNote: { t: 1, f: 0 } },  // newly fretted, 1 fret below
-            { t: 2, f: 6, _origNote: { t: 2, f: 6 } },  // fretted donor, adjustment 0
+            { t: 1, f: 3, origNote: { t: 1, f: 0 } },  // newly fretted, 1 fret below
+            { t: 2, f: 6, origNote: { t: 2, f: 6 } },  // fretted donor, adjustment 0
         ]),
         [{ time: 1, fret: 3, width: 5 }]);
     assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 2, width: 4 }], [
-            { t: 1, f: 2, _origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
-            { t: 2, f: 7, _origNote: { t: 2, f: 0 } },  // newly fretted, 1 fret above
+            { t: 1, f: 2, origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
+            { t: 2, f: 7, origNote: { t: 2, f: 0 } },  // newly fretted, 1 fret above
         ]),
         [{ time: 1, fret: 2, width: 5 }]);
 
@@ -351,27 +352,27 @@ test('anchor widening: modest widen, clean split, or single wide band', () => {
     // instead of being left uncovered (both directions), as long as it's
     // strictly later than the current band's own start.
     assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 4, width: 4 }], [
-            { t: 1, f: 4, _origNote: { t: 1, f: 4 } },  // fretted donor, adjustment 0
-            { t: 2, f: 1, _origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
+            { t: 1, f: 4, origNote: { t: 1, f: 4 } },  // fretted donor, adjustment 0
+            { t: 2, f: 1, origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
         ]),
         [{ time: 1, fret: 4, width: 4 }, { time: 2, fret: 1, width: 4 }]);
     assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 2, width: 4 }], [
-            { t: 1, f: 2, _origNote: { t: 1, f: 2 } },
-            { t: 2, f: 9, _origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
+            { t: 1, f: 2, origNote: { t: 1, f: 2 } },
+            { t: 2, f: 9, origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
         ]),
         [{ time: 1, fret: 2, width: 4 }, { time: 2, fret: 9, width: 4 }]);
     const donorWindow = CR.ANCHOR_DONOR_WINDOW_S;
     assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 5, width: 4 }], [
-            { t: 0, f: 5, _origNote: { t: 0, f: 5 } },
-            { t: donorWindow + 1, f: 4, _origNote: { t: donorWindow + 1, f: 0 } },
+            { t: 0, f: 5, origNote: { t: 0, f: 5 } },
+            { t: donorWindow + 1, f: 4, origNote: { t: donorWindow + 1, f: 0 } },
         ]),
         [{ time: 0, fret: 5, width: 4 }, { time: donorWindow + 1, fret: 4, width: 4 }]);
 
     // Widening (and splitting) only ever draws candidates from the
     // anchor's own span; a note past it belongs to the next anchor.
     const risingNotes = [
-        { t: 1, f: 2, _origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
-        { t: 6, f: 7, _origNote: { t: 6, f: 0 } },  // newly fretted, but belongs to the NEXT anchor's span
+        { t: 1, f: 2, origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
+        { t: 6, f: 7, origNote: { t: 6, f: 0 } },  // newly fretted, but belongs to the NEXT anchor's span
     ];
     const risingAnchors = [
         { time: 1, fret: 2, width: 4 },
@@ -387,9 +388,9 @@ test('anchor widening: modest widen, clean split, or single wide band', () => {
     // true fret range together, rather than only the later
     // (donor-derived) run.
     const notes = [
-        { t: 1, f: 1, _origNote: { t: 1, f: 0 } },  // newly fretted (was open), TIES the anchor's own start
-        { t: 2, f: 1, _origNote: { t: 2, f: 0 } },  // newly fretted (was open)
-        { t: 3, f: 4, _origNote: { t: 3, f: 3 } },  // normally fretted, donor for the base band
+        { t: 1, f: 1, origNote: { t: 1, f: 0 } },  // newly fretted (was open), TIES the anchor's own start
+        { t: 2, f: 1, origNote: { t: 2, f: 0 } },  // newly fretted (was open)
+        { t: 3, f: 4, origNote: { t: 3, f: 3 } },  // normally fretted, donor for the base band
     ];
     const anchors = [
         { time: 1, fret: 3, width: 4 }, // donor adjustment +1 -> base band [4,8]
@@ -406,8 +407,8 @@ test('anchor widening: modest widen, clean split, or single wide band', () => {
     // flickering through a dozen tiny anchors.
     const rapidNotes = [];
     for (let i = 0; i < 10; i++) {
-        rapidNotes.push({ t: i * 0.4, f: 8, _origNote: { t: i * 0.4, f: 8 } });
-        rapidNotes.push({ t: i * 0.4 + 0.2, f: 1, _origNote: { t: i * 0.4 + 0.2, f: 0 } });
+        rapidNotes.push({ t: i * 0.4, f: 8, origNote: { t: i * 0.4, f: 8 } });
+        rapidNotes.push({ t: i * 0.4 + 0.2, f: 1, origNote: { t: i * 0.4 + 0.2, f: 0 } });
     }
     assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 8, width: 4 }], rapidNotes),
         [{ time: 0, fret: 1, width: 7 }]);
@@ -518,7 +519,7 @@ test('reduceHandTravel relocates a cross-string jump to an exact-pitch alternate
 });
 
 // reduceHandTravel's retune-attributable gate: notes carrying an
-// `_origNote` back-reference (as createRetuner tags them) only trigger a
+// `origNote` back-reference (as createRetuner tags them) only trigger a
 // relocation when retuning actually made the jump worse than the source
 // chart already demanded.
 test('reduceHandTravel retune-attributable gate', () => {
@@ -530,8 +531,8 @@ test('reduceHandTravel retune-attributable gate', () => {
     // EADG chart's cross-string jump surviving unchanged onto BEADG must
     // stay unchanged, not get "corrected."
     const unchanged = [
-        { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
-        { t: 0.2, s: 1, f: 8, _origNote: { s: 1, f: 8 } },
+        { t: 0, s: 0, f: 1, origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 8, origNote: { s: 1, f: 8 } },
     ];
     reduceHandTravel(unchanged, [0, 5, 10, 15], 20);
     assert.deepStrictEqual(unchanged.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 1, f: 8 }]);
@@ -541,8 +542,8 @@ test('reduceHandTravel retune-attributable gate', () => {
     // problem, not one the source already had, so it must still fire even
     // though the source gap alone crossed the threshold.
     const worsened = [
-        { t: 0, s: 0, f: 3, _origNote: { s: 0, f: 3 } },
-        { t: 0.2, s: 1, f: 18, _origNote: { s: 1, f: 8 } },
+        { t: 0, s: 0, f: 3, origNote: { s: 0, f: 3 } },
+        { t: 0.2, s: 1, f: 18, origNote: { s: 1, f: 8 } },
     ];
     reduceHandTravel(worsened, [0, 5, 10, 15, 20], 24);
     assert.deepStrictEqual(worsened.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 3 }, { s: 2, f: 13 }]);
@@ -552,8 +553,8 @@ test('reduceHandTravel retune-attributable gate', () => {
     // slide/run), the origin gap is irrelevant -- only the post-remap
     // cross-string gap matters here.
     const sameSourceString = [
-        { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
-        { t: 0.2, s: 1, f: 8, _origNote: { s: 0, f: 14 } },
+        { t: 0, s: 0, f: 1, origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 8, origNote: { s: 0, f: 14 } },
     ];
     reduceHandTravel(sameSourceString, [0, 5, 10, 15], 20);
     assert.deepStrictEqual(sameSourceString.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 2, f: 3 }]);
@@ -561,10 +562,10 @@ test('reduceHandTravel retune-attributable gate', () => {
     // A side that was open in the source and stays open post-remap
     // counts toward "already existed" like any other unchanged side (a
     // side that became fretted is the exception, exercised by the
-    // "trill" test above via its lack of `_origNote`).
+    // "trill" test above via its lack of `origNote`).
     const stillOpen = [
-        { t: 0, s: 0, f: 1, _origNote: { s: 0, f: 1 } },
-        { t: 0.2, s: 1, f: 0, _origNote: { s: 1, f: 0 } },
+        { t: 0, s: 0, f: 1, origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 0, origNote: { s: 1, f: 0 } },
     ];
     reduceHandTravel(stillOpen, [0, 5, 10, 15], 20);
     assert.deepStrictEqual(stillOpen.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 1, f: 0 }]);
@@ -577,9 +578,9 @@ test('reduceHandTravel retune-attributable gate', () => {
     // dragged along purely because A was processed (and moved) first,
     // one array slot earlier.
     const seedA_B = [
-        { t: 0.0, s: 0, f: 2,  _origNote: { s: 0, f: 2 } },
-        { t: 0.2, s: 1, f: 10, _origNote: { s: 1, f: 3 } },
-        { t: 0.4, s: 3, f: 11, _origNote: { s: 3, f: 4 } },
+        { t: 0.0, s: 0, f: 2,  origNote: { s: 0, f: 2 } },
+        { t: 0.2, s: 1, f: 10, origNote: { s: 1, f: 3 } },
+        { t: 0.4, s: 3, f: 11, origNote: { s: 3, f: 4 } },
     ];
     reduceHandTravel(seedA_B, [0, 5, 10, 15, 20, 25], 24);
     assert.deepStrictEqual(seedA_B.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 2, f: 5 }, { s: 3, f: 11 }]);
@@ -590,10 +591,10 @@ test('reduceHandTravel retune-attributable gate', () => {
     // Only the first is adjacent to the awkward neighbor at t=0, but the
     // whole run must relocate together, not just that one hit.
     const repeatRun = [
-        { t: 0,   s: 0, f: 1, _origNote: { s: 0, f: 1 } },
-        { t: 0.2, s: 1, f: 8, _origNote: { s: 5, f: 5 } },
-        { t: 0.7, s: 1, f: 8, _origNote: { s: 5, f: 5 } },
-        { t: 4.0, s: 1, f: 8, _origNote: { s: 5, f: 5 } },
+        { t: 0,   s: 0, f: 1, origNote: { s: 0, f: 1 } },
+        { t: 0.2, s: 1, f: 8, origNote: { s: 5, f: 5 } },
+        { t: 0.7, s: 1, f: 8, origNote: { s: 5, f: 5 } },
+        { t: 4.0, s: 1, f: 8, origNote: { s: 5, f: 5 } },
     ];
     reduceHandTravel(repeatRun, [0, 5, 10, 15, 20], 20);
     assert.deepStrictEqual(repeatRun.map(n => ({ s: n.s, f: n.f })),
@@ -608,10 +609,10 @@ test('reduceHandTravel retune-attributable gate', () => {
     // same-fret-number alternate on a string that has nothing to do
     // with A, which would only trade one bad jump for another.
     const sameStringJump = [
-        { t: 0,   s: 2, f: 5, _origNote: { s: 2, f: 5 } },              // A: comfortable seed
-        { t: 0.2, s: 1, f: 3, _origNote: { s: 1, f: 0 } },              // B: newly fretted, natural E
-        { t: 0.4, s: 1, f: 8, _origNote: { s: 1, f: 5 } },              // C: natural E too -- same source string as B
-        { t: 0.6, s: 2, f: 5, _origNote: { s: 2, f: 5 } },              // D: comfortable exit
+        { t: 0,   s: 2, f: 5, origNote: { s: 2, f: 5 } },              // A: comfortable seed
+        { t: 0.2, s: 1, f: 3, origNote: { s: 1, f: 0 } },              // B: newly fretted, natural E
+        { t: 0.4, s: 1, f: 8, origNote: { s: 1, f: 5 } },              // C: natural E too -- same source string as B
+        { t: 0.6, s: 2, f: 5, origNote: { s: 2, f: 5 } },              // D: comfortable exit
     ];
     reduceHandTravel(sameStringJump, [0, 5, 10, 15, 20], 20);
     assert.deepStrictEqual(sameStringJump.map(n => ({ s: n.s, f: n.f })),
@@ -632,9 +633,9 @@ test('reduceHandTravel retune-attributable gate', () => {
     // untouched while an otherwise-identical, non-slide run member around
     // it still relocates on its own.
     const runWithSlide = [
-        { t: 0,   s: 0, f: 1, _origNote: { s: 5, f: 1 } },
-        { t: 0.2, s: 1, f: 8, _origNote: { s: 6, f: 5 } },
-        { t: 0.4, s: 1, f: 8, _origNote: { s: 6, f: 5 }, slu: 10 },
+        { t: 0,   s: 0, f: 1, origNote: { s: 5, f: 1 } },
+        { t: 0.2, s: 1, f: 8, origNote: { s: 6, f: 5 } },
+        { t: 0.4, s: 1, f: 8, origNote: { s: 6, f: 5 }, slu: 10 },
     ];
     reduceHandTravel(runWithSlide, [0, 5, 10, 15, 20], 20);
     assert.deepStrictEqual(runWithSlide.map(n => ({ s: n.s, f: n.f })),
@@ -712,7 +713,7 @@ test('createRetuner end-to-end retune-attributable gate', () => {
         });
         createRetuner().apply(bundle, target, 24, 0);
         const doubleStop = bundle.notes.filter(n => n.t === 0.0);
-        assert.deepStrictEqual(doubleStop.map(n => ({ s: n.s, f: n.f, hasSlide: Number.isInteger(n.sl) || Number.isInteger(n.slu), relocated: n._natS !== undefined })),
+        assert.deepStrictEqual(doubleStop.map(n => ({ s: n.s, f: n.f, hasSlide: Number.isInteger(n.sl) || Number.isInteger(n.slu), relocated: n.natS !== undefined })),
             [{ s: 2, f: 3, hasSlide: true, relocated: false }, { s: 3, f: 6, hasSlide: true, relocated: false }]);
     }
 });
@@ -885,6 +886,39 @@ test('createRetuner cache invalidation on target tuning change', () => {
     assert.deepStrictEqual(bundle.notes[0].f, 0);
 });
 
+// createRetuner's fail-safe: a malformed bundle (invalid stringCount, or a
+// non-array tuning) passes every array through unremapped rather than
+// crashing or silently dropping the chart.
+test('createRetuner fail-safe passes a malformed bundle through unremapped', (t) => {
+    const { createRetuner } = CR;
+    const rawNotes = [{ t: 0, s: 0, f: 3 }];
+    const rawChords = [{ id: null, t: 1, notes: [] }];
+    const rawAnchors = [{ time: 0, fret: 1, width: 3 }];
+
+    t.test('non-array tuning', () => {
+        const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: null, capo: 0, stringCount: 4 };
+        createRetuner().apply(bundle, [40, 45, 50, 55]);
+        assert.strictEqual(bundle.notes, rawNotes);
+        assert.strictEqual(bundle.chords, rawChords);
+        assert.strictEqual(bundle.anchors, rawAnchors);
+    });
+
+    t.test('invalid stringCount', () => {
+        const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: [0, 0, 0, 0], capo: 0, stringCount: 0 };
+        createRetuner().apply(bundle, [40, 45, 50, 55]);
+        assert.strictEqual(bundle.notes, rawNotes);
+    });
+});
+
+// A bundle with no chord templates at all (chordTemplates omitted/non-array)
+// resolves to an empty array rather than crashing.
+test('createRetuner handles a bundle with no chord templates', () => {
+    const { createRetuner } = CR;
+    const bundle = makeBundle({ notes: [{ t: 0, s: 0, f: 3 }], tuning: [0, 0, 0, 0], chordTemplates: undefined });
+    createRetuner().apply(bundle, [40, 45, 50, 55]);
+    assert.deepStrictEqual(bundle.chordTemplates, []);
+});
+
 // Switching tuning mid-playthrough must re-add a note previously dropped
 // as unplayable, if now in range under the new target.
 test('switching tuning mid-playthrough re-adds a previously dropped note', () => {
@@ -921,9 +955,9 @@ test('maxFret per-tuning-profile ceiling', () => {
     assert.deepStrictEqual(resolveTargetForFret(40, 0, 21, oneString, 24), { s: 0, f: 21, adjustment: 0 });
     assert.deepStrictEqual(resolveTargetForFret(40, 0, 15, oneString, 14), null);
 
-    assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 23, width: 4 }], [{ t: 0, f: 0, _origNote: { t: 0, f: 0 } }], 24),
+    assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 23, width: 4 }], [{ t: 0, f: 0, origNote: { t: 0, f: 0 } }], 24),
         [{ time: 0, fret: 23, width: 4 }]);
-    assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 23, width: 4 }], [{ t: 0, f: 0, _origNote: { t: 0, f: 0 } }]),
+    assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 23, width: 4 }], [{ t: 0, f: 0, origNote: { t: 0, f: 0 } }]),
         [{ time: 0, fret: 20, width: 4 }]);
 
     // Single-string source/target (as above) so there's no adjacent string
@@ -1003,7 +1037,7 @@ test('displayFretOffset: physical-fret display shift', () => {
     const bundle = makeBundle({ notes: rawNotes, anchors: rawAnchors, tuning: [0] });
     retuner.apply(bundle, effective, relCeiling, capo);
     assert.deepStrictEqual(bundle.notes.map(n => n.f), [5, 0, 7]);
-    assert.deepStrictEqual(bundle.notes.some(n => n._origNote.f === 2), false);
+    assert.deepStrictEqual(bundle.notes.some(n => n.origNote.f === 2), false);
     assert.deepStrictEqual(bundle.notes[2].sl, 9);
     assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 5, width: 4 }]);
     assert.notStrictEqual(bundle.anchors[0], rawAnchors[0],
@@ -1314,6 +1348,12 @@ test('intToHex / resolveColorsArray', () => {
         ['#abcdef', '#222222', '#333333', '#444444', '#555555']);
     assert.deepStrictEqual(resolveColorsArray(['#111111', '#222222', '#333333', '#444444', '#555555', '#666666'], 5, defaults),
         defaults);
+});
+
+// lowBColor: no localStorage override available in this (Node) environment,
+// so it always falls through to the documented default.
+test('lowBColor falls back to the default outside a browser', () => {
+    assert.deepStrictEqual(lowBColor(), 0xcc00aa);
 });
 
 // Unplayable-low-note-drop regression: EADG target (4-string, B removed)
@@ -1642,8 +1682,8 @@ test('solver node-budget abort degrades to the per-note path', (t) => {
     // The per-note fallback keeps exact pitches: every survivor sounds
     // its source pitch (open midi + fret identical across the remap).
     for (const n of cappedBundle.notes) {
-        t.test(`survivor origS=${n._origNote.s} origF=${n._origNote.f}`, () => {
-            const srcMidi = raw.tuning[n._origNote.s] + [28, 33, 38, 43][n._origNote.s] + n._origNote.f;
+        t.test(`survivor origS=${n.origNote.s} origF=${n.origNote.f}`, () => {
+            const srcMidi = raw.tuning[n.origNote.s] + [28, 33, 38, 43][n.origNote.s] + n.origNote.f;
             assert.deepStrictEqual(eadg[n.s] + n.f, srcMidi);
         });
     }
@@ -1725,8 +1765,8 @@ test('remapAnchors prefers a nearby exact donor over a revoiced one', () => {
     const { remapAnchors, ANCHOR_DONOR_WINDOW_S } = CR;
     assert.ok(ANCHOR_DONOR_WINDOW_S > 0, 'donor window sane');
     const mk = (t, origF, newF, revoiced) => {
-        const n = { t, s: 0, f: newF, _origNote: { t, s: 0, f: origF } };
-        if (revoiced !== undefined) n._crRevoiced = revoiced;
+        const n = { t, s: 0, f: newF, origNote: { t, s: 0, f: origF } };
+        if (revoiced !== undefined) n.crRevoiced = revoiced;
         return n;
     };
     // Revoiced (+12) donor right at the anchor, exact (-2) donor 1s later.
@@ -1772,8 +1812,8 @@ test('createRetuner end-to-end: revoiced bucket notes and anchor donor fallback'
     near.apply(nearBundle, eadg);
     const bucketNotes = nearBundle.notes.filter(n => n.t === 0);
     assert.ok(bucketNotes.length >= 1, 'revoiced bucket has at least one note');
-    assert.ok(bucketNotes.every(n => n._crRevoiced === true), 'revoiced bucket notes are tagged');
-    assert.deepStrictEqual(nearBundle.notes.find(n => n.t === 0.6)._crRevoiced, false);
+    assert.ok(bucketNotes.every(n => n.crRevoiced === true), 'revoiced bucket notes are tagged');
+    assert.deepStrictEqual(nearBundle.notes.find(n => n.t === 0.6).crRevoiced, false);
     assert.deepStrictEqual(nearBundle.anchors, [{ time: 0, fret: 1, width: 4 }]);
 
     // Same chart with the exact note pushed past the window: the anchor
@@ -1783,7 +1823,7 @@ test('createRetuner end-to-end: revoiced bucket notes and anchor donor fallback'
     const farBundle = mkBundle(farRaw);
     far.apply(farBundle, eadg);
     const donor = farBundle.notes[0]; // first (time-sorted) fretted note at t=0
-    const expected = Math.max(0, Math.min(20, 1 + donor.f - donor._origNote.f));
+    const expected = Math.max(0, Math.min(20, 1 + donor.f - donor.origNote.f));
     assert.deepStrictEqual(farBundle.anchors, [{ time: 0, fret: expected, width: 4 }]);
     assert.notStrictEqual(expected, 1, 'fallback case actually differs from the exact adjustment');
 });

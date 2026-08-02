@@ -329,6 +329,17 @@ they classify, so a renderer merging live-note fret with template fret
 (`mergeChordShape`) doesn't have the note's real fret silently overwrite
 the template's "open" classification.
 
+**Phase 21 — Retuning defaults off on first install (2026-08-02).** Phase
+19's **Retuning active** toggle auto-selected itself as the active
+chart-transform provider the first time the plugin ever registered
+(`_registerAndAutoSelect`'s one-time `autoSelected` flag), so a fresh
+install silently remapped every chart before the player had chosen a
+target tuning. Removed the auto-select entirely (`_registerProvider` now
+only registers the provider and mounts the in-song toggle) — a fresh
+install leaves every chart in its original tuning until the player turns
+Retuning active on, matching the "opt in" framing the settings toggle and
+README already used to describe turning it *off*.
+
 ## Upstream sync log (historical — closed by Phase 19)
 
 Procedure: see PLANNING.md ("Syncing from upstream") — the pre-Phase-19

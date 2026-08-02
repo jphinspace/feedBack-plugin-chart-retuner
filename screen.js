@@ -455,7 +455,7 @@ import { CR } from './src/chart-retune.js';
         if (!_capabilitiesReady()) return;
         window.feedBack.capabilities.dispatch({ capability: 'chart-transform', command: 'refresh', source: PROVIDER_ID });
     }
-    function _registerAndAutoSelect() {
+    function _registerProvider() {
         const api = window.feedBack.capabilities;
         Promise.resolve(api.dispatch({
             capability: 'chart-transform',
@@ -463,24 +463,17 @@ import { CR } from './src/chart-retune.js';
             source: PROVIDER_ID,
             payload: { providerId: PROVIDER_ID, label: 'Chart Retuner', transform: _transform },
         })).then(() => {
-            // An already-active provider gets a guaranteed mount via
-            // _setActive -> _install -> _restageChartTransform -> _transform()
-            // above. An inactive one has no such trigger, and 'song:ready' is
-            // a no-op if it already fired before this script finished
-            // registering (e.g. reload mid-song) — mount here too so the
-            // in-song Retuner toggle stays reachable.
+            // An already-active provider (the user turned it on in a past
+            // session) gets a guaranteed mount via _setActive -> _install ->
+            // _restageChartTransform -> _transform() above. An inactive one
+            // has no such trigger, and 'song:ready' is a no-op if it already
+            // fired before this script finished registering (e.g. reload
+            // mid-song) — mount here too so the in-song Retuner toggle stays
+            // reachable. Retuning itself starts OFF; the player opts in via
+            // the Retuning active toggle.
             _crMountAdjustControls();
-            // Auto-activate only the first time this plugin ever registers — an
-            // absent key means either "never chosen" or "explicitly cleared", and
-            // this flag is what tells the two apart on later loads.
-            if (_read('autoSelected') != null) return;
-            _write('autoSelected', '1');
-            api.dispatch({
-                capability: 'chart-transform', command: 'select-provider',
-                source: PROVIDER_ID, payload: { providerId: PROVIDER_ID },
-            });
         });
     }
-    if (_capabilitiesReady()) _registerAndAutoSelect();
-    else window.addEventListener('feedBack:capabilities:ready', _registerAndAutoSelect, { once: true });
+    if (_capabilitiesReady()) _registerProvider();
+    else window.addEventListener('feedBack:capabilities:ready', _registerProvider, { once: true });
 })();

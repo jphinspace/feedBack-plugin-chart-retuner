@@ -16,7 +16,7 @@ export function pitchClassOf(midi) {
 // for Cb or 12 for B#: the octave arithmetic in parseTargetNote needs the
 // raw value so accidentals crossing an octave boundary land on the right
 // MIDI note). Returns null for a non-note letter.
-function _letterAccidentalValue(letter, accidental) {
+function letterAccidentalValue(letter, accidental) {
     let pc = NOTE_LETTER_PITCH_CLASS[String(letter).toLowerCase()];
     if (pc === undefined) return null;
     if (accidental === '#') pc += 1;
@@ -28,7 +28,7 @@ function _letterAccidentalValue(letter, accidental) {
 // ('C', 'F#', 'Bb') — the octave-less half of parseTargetNote, shared
 // with chord-name root parsing (chord-solver.js), keeping the two in sync.
 export function notePitchClass(letter, accidental) {
-    const v = _letterAccidentalValue(letter, accidental || '');
+    const v = letterAccidentalValue(letter, accidental || '');
     return v === null ? null : pitchClassOf(v);
 }
 
@@ -39,8 +39,10 @@ export function parseTargetNote(spec) {
     if (typeof spec !== 'string') return null;
     const m = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(spec.trim());
     if (!m) return null;
-    const letter = m[1], accidental = m[2], octave = parseInt(m[3], 10);
-    const pc = _letterAccidentalValue(letter, accidental);
+    const letter = m[1];
+    const accidental = m[2];
+    const octave = parseInt(m[3], 10);
+    const pc = letterAccidentalValue(letter, accidental);
     return { midi: pc + SEMITONES_PER_OCTAVE * (octave + 1), label: letter.toUpperCase() + accidental };
 }
 

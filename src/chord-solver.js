@@ -85,7 +85,7 @@ export function parseChordRootFromName(name) {
 // Groups a fretted-note list (sorted by string) into maximal
 // contiguous-string same-fret runs, each frettable with one finger laid
 // across it (a mini-barre).
-function _contiguousRuns(frettedSortedByString) {
+function contiguousRuns(frettedSortedByString) {
     const runs = [];
     for (const n of frettedSortedByString) {
         const last = runs[runs.length - 1];
@@ -99,6 +99,15 @@ function _contiguousRuns(frettedSortedByString) {
     return runs;
 }
 
+// Min/max `.f` across a fretted-note list ({ min: Infinity, max: -Infinity }
+// for an empty list — callers that care check length first).
+function fretRange(fretted) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const n of fretted) { if (n.f < min) min = n.f; if (n.f > max) max = n.f; }
+    return { min, max };
+}
+
 // Fingers needed to fret `voicing` ([{ s, f }], one note per string): a
 // full barre at the chord's min fret counts as one (when valid, per
 // barreIsValid); each contiguous same-fret run elsewhere counts as one
@@ -107,12 +116,11 @@ function _contiguousRuns(frettedSortedByString) {
 export function fingersNeeded(voicing) {
     const fretted = voicing.filter(n => isFretted(n.f)).sort((a, b) => a.s - b.s);
     if (fretted.length === 0) return 0;
-    let minF = Infinity;
-    for (const n of fretted) if (n.f < minF) minF = n.f;
+    const minF = fretRange(fretted).min;
     const atMin = fretted.filter(n => n.f === minF);
     const useBarre = atMin.length >= 2 && barreIsValid(voicing);
     const rest = useBarre ? fretted.filter(n => n.f !== minF) : fretted;
-    return (useBarre ? 1 : 0) + _contiguousRuns(rest).length;
+    return (useBarre ? 1 : 0) + contiguousRuns(rest).length;
 }
 
 // A barre at the chord's min fretted fret covers every string from the
@@ -121,12 +129,12 @@ export function fingersNeeded(voicing) {
 export function barreIsValid(voicing) {
     const fretted = voicing.filter(n => isFretted(n.f));
     if (fretted.length < 2) return false;
-    let minF = Infinity;
-    for (const n of fretted) if (n.f < minF) minF = n.f;
-    let atMin = 0, barreLowS = Infinity;
+    const minF = fretRange(fretted).min;
+    let atMin = 0;
+    let barreLowS = Infinity;
     for (const n of fretted) {
         if (n.f !== minF) continue;
-        atMin++;
+        atMin += 1;
         if (n.s < barreLowS) barreLowS = n.s;
     }
     if (atMin < 2) return false;
@@ -140,8 +148,7 @@ export function barreIsValid(voicing) {
 export function voicingPlayable(voicing, spec) {
     const fretted = voicing.filter(n => isFretted(n.f));
     if (fretted.length > 1) {
-        let minF = Infinity, maxF = -Infinity;
-        for (const n of fretted) { if (n.f < minF) minF = n.f; if (n.f > maxF) maxF = n.f; }
+        const { min: minF, max: maxF } = fretRange(fretted);
         if (maxF - minF > Math.max(MAX_CHORD_SPAN, spec.span)) return false;
     }
     return fingersNeeded(voicing) <= Math.max(MAX_FRETTING_FINGERS, spec.fingers);
@@ -155,7 +162,7 @@ export function voicingPlayable(voicing, spec) {
 // note sounds.
 export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) {
     const specNotes = [];
-    for (let i = 0; i < notes.length; i++) {
+    for (let i = 0; i < notes.length; i += 1) {
         const n = notes[i];
         const open = sourceOpenMidiByString[n.s];
         if (open === null || open === undefined) continue;
@@ -170,10 +177,10 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) 
     let bassMidi = Infinity;
     for (const n of specNotes) if (n.midi < bassMidi) bassMidi = n.midi;
     const fretted = specNotes.filter(n => isFretted(n.f));
-    let minFretted = null, span = 0;
+    let minFretted = null;
+    let span = 0;
     if (fretted.length > 0) {
-        let minF = Infinity, maxF = -Infinity;
-        for (const n of fretted) { if (n.f < minF) minF = n.f; if (n.f > maxF) maxF = n.f; }
+        const { min: minF, max: maxF } = fretRange(fretted);
         minFretted = minF;
         span = maxF - minF;
     }
@@ -236,8 +243,12 @@ export function degradationLadder(spec) {
 export function scoreVoicing(spec, voicing) {
     const W = SOLVER_WEIGHTS;
     let cost = 0;
-    let minMidi = Infinity, minMidiPc = -1, openCount = 0, minFretted = null;
-    let minS = Infinity, maxS = -Infinity;
+    let minMidi = Infinity;
+    let minMidiPc = -1;
+    let openCount = 0;
+    let minFretted = null;
+    let minS = Infinity;
+    let maxS = -Infinity;
     const tgtPcCounts = new Map();
     for (const n of voicing) {
         if (!spec.pitchSet.has(n.midi)) cost += W.EXACT_PITCH_MISS;
@@ -292,7 +303,7 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
     const fullMask = (1 << pcsArr.length) - 1;
     const srcPos = spec.minFretted !== null ? spec.minFretted : 1;
     const positions = [];
-    for (let p = 1; p <= maxFret - allowedSpan; p++) positions.push(p);
+    for (let p = 1; p <= maxFret - allowedSpan; p += 1) positions.push(p);
     positions.sort((a, b) => Math.abs(a - srcPos) - Math.abs(b - srcPos) || a - b);
 
     const W = SOLVER_WEIGHTS;
@@ -305,12 +316,12 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
         // qualifies. Window frets start at the position itself — fret 0
         // is only ever the explicit open candidate.
         const cands = [];
-        for (let j = 0; j < nStr; j++) {
+        for (let j = 0; j < nStr; j += 1) {
             const open = target[j];
             const list = [null];
             const openBit = pcBit.get(pitchClassOf(open));
             if (openBit !== undefined) list.push({ s: j, f: 0, midi: open, pc: pitchClassOf(open), bit: openBit });
-            for (let f = p; f <= p + allowedSpan && f <= maxFret; f++) {
+            for (let f = p; f <= p + allowedSpan && f <= maxFret; f += 1) {
                 const midi = open + f;
                 const bit = pcBit.get(pitchClassOf(midi));
                 if (bit !== undefined) list.push({ s: j, f, midi, pc: pitchClassOf(midi), bit });
@@ -318,7 +329,9 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
             cands.push(list);
         }
         (function dfs(j, mask, partial) {
-            if (budget.nodes-- <= 0) { budget.aborted = true; return; }
+            const nodesLeft = budget.nodes;
+            budget.nodes -= 1;
+            if (nodesLeft <= 0) { budget.aborted = true; return; }
             if (best && partial >= best.cost) return;
             if (j === nStr) {
                 if (mask !== fullMask || chosen.length === 0) return;
@@ -348,7 +361,7 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
 }
 
 // Matches each solved target note back to a distinct source note (for
-// _origNote scoring linkage and technique carry-over): exact MIDI match
+// origNote scoring linkage and technique carry-over): exact MIDI match
 // first, then nearest same-pitch-class, then nearest by pitch, always
 // among not-yet-used source notes. Target notes are matched in ascending
 // pitch order for determinism. Returns [{ srcIndex, s, f }], srcIndex
@@ -358,28 +371,22 @@ export function matchVoicingToSource(voicing, spec) {
     const ordered = voicing.slice().sort((a, b) => a.midi - b.midi || a.s - b.s);
     const placements = [];
     for (const n of ordered) {
-        let pick = null;
-        for (const s of spec.notes) {
-            if (used.has(s.idx) || s.midi !== n.midi) continue;
-            pick = s;
-            break;
-        }
-        if (!pick) {
+        // Nearest not-yet-used source note passing `filter`; an exact
+        // midi match is always distance 0, so this doubles as "first
+        // exact match wins" for that case.
+        const findNearest = (filter) => {
             let bestD = Infinity;
+            let picked = null;
             for (const s of spec.notes) {
-                if (used.has(s.idx) || s.pc !== n.pc) continue;
+                if (used.has(s.idx) || !filter(s)) continue;
                 const d = Math.abs(s.midi - n.midi);
-                if (d < bestD) { bestD = d; pick = s; }
+                if (d < bestD) { bestD = d; picked = s; }
             }
-        }
-        if (!pick) {
-            let bestD = Infinity;
-            for (const s of spec.notes) {
-                if (used.has(s.idx)) continue;
-                const d = Math.abs(s.midi - n.midi);
-                if (d < bestD) { bestD = d; pick = s; }
-            }
-        }
+            return picked;
+        };
+        const pick = findNearest(s => s.midi === n.midi)
+            || findNearest(s => s.pc === n.pc)
+            || findNearest(() => true);
         if (!pick) return null; // impossible: |voicing| <= |spec.notes|
         used.add(pick.idx);
         placements.push({ srcIndex: pick.idx, s: n.s, f: n.f });
@@ -415,7 +422,7 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
     const budget = (opts && opts.budget) || { nodes: MAX_SEARCH_NODES, aborted: false };
     const levels = degradationLadder(spec);
     let best = null;
-    for (let level = 0; level < levels.length; level++) {
+    for (let level = 0; level < levels.length; level += 1) {
         if (budget.nodes <= 0) { budget.aborted = true; break; }
         const found = solveVoicingSearch(spec, levels[level], targetMidiTuning, { maxNotes: spec.noteCount, budget }, maxFret);
         if (found) {
@@ -442,7 +449,7 @@ export function computeChordFingers(fretsByTargetString) {
     const n = fretsByTargetString.length;
     const fingers = new Array(n).fill(-1);
     const voicing = [];
-    for (let s = 0; s < n; s++) {
+    for (let s = 0; s < n; s += 1) {
         const f = fretsByTargetString[s];
         if (isOpen(f)) fingers[s] = 0;
         else if (isFretted(f)) voicing.push({ s, f });
@@ -460,17 +467,17 @@ export function computeChordFingers(fretsByTargetString) {
     if (rest.length <= MAX_FRETTING_FINGERS - (useBarre ? 1 : 0)) {
         // Canonical: one finger per remaining note, low fret first.
         const sorted = rest.slice().sort((a, b) => a.f - b.f || a.s - b.s);
-        for (const x of sorted) fingers[x.s] = next++;
+        for (const x of sorted) { fingers[x.s] = next; next += 1; }
         return fingers;
     }
     // Mini-barre fallback: contiguous same-fret runs share a finger.
-    const runs = _contiguousRuns(rest).sort((a, b) => a.f - b.f || a.minS - b.minS);
+    const runs = contiguousRuns(rest).sort((a, b) => a.f - b.f || a.minS - b.minS);
     if (next - 1 + runs.length > MAX_FRETTING_FINGERS) {
         return new Array(n).fill(-1).map((v, s) => (isOpen(fretsByTargetString[s]) ? 0 : -1)); // ambiguous
     }
     for (const run of runs) {
         for (const x of run.notes) fingers[x.s] = next;
-        next++;
+        next += 1;
     }
     return fingers;
 }

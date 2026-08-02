@@ -10,7 +10,7 @@ import { EXTENDED_DEFAULT_TARGET_TUNING } from './target-tuning.js';
 // from that single array rather than a second hardcoded MIDI table,
 // keeping the two permanently in sync.
 const EXTENDED_COLOR_ROLES = ['lowExt2', 'lowExt1', 'lowB', 'e', 'a', 'd', 'g', 'highB', 'highE'];
-const _colorRoleByMidi = new Map(
+const colorRoleByMidi = new Map(
     EXTENDED_DEFAULT_TARGET_TUNING.map((spec, i) => [parseTargetNote(spec).midi, EXTENDED_COLOR_ROLES[i]])
 );
 
@@ -21,7 +21,7 @@ const _colorRoleByMidi = new Map(
 // whose colors are pinned to string position, not note identity, so an
 // AEADG tuning's position 0 still gets the "low string" role).
 export function colorRoleForNote(midi) {
-    return _colorRoleByMidi.get(midi) || 'gray';
+    return colorRoleByMidi.get(midi) || 'gray';
 }
 
 function hexToInt(hex) {
@@ -57,7 +57,7 @@ export const LIGHT_GRAY_COLOR = 0xd3d3d3;
 // wherever the input entry is missing or an invalid hex.
 export function resolveColorsArray(colorsIn, length, defaults) {
     const out = new Array(length);
-    for (let i = 0; i < length; i++) {
+    for (let i = 0; i < length; i += 1) {
         const c = Array.isArray(colorsIn) ? colorsIn[i] : undefined;
         out[i] = (typeof c === 'string' && hexToInt(c) != null) ? c : defaults[i];
     }
