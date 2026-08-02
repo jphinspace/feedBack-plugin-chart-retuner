@@ -156,18 +156,23 @@ export function voicingPlayable(voicing, spec) {
 
 // Builds the solver's view of one source chord from its notes
 // ([{ s, f, ... }], source-string indexed) under the source tuning
-// (sourceOpenMidiByString, capo already folded in). templateName seeds
+// (sourceOpenMidiByString excludes chart capo; `capo` raises only the
+// notes at or below it — see the Math.max below). templateName seeds
 // the root when it parses and agrees with the sounded pitch classes;
 // otherwise the lowest sounded pitch is the root. Returns null when no
 // note sounds.
-export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) {
+export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName, capo = 0) {
     const specNotes = [];
     for (let i = 0; i < notes.length; i += 1) {
         const n = notes[i];
         const open = sourceOpenMidiByString[n.s];
         if (open === null || open === undefined) continue;
-        const midi = open + n.f;
-        specNotes.push({ idx: i, s: n.s, f: n.f, midi, pc: pitchClassOf(midi) });
+        // Chart capo raises an open string's sounding pitch; an already-
+        // fretted note's raw fret is already an absolute position, so it
+        // must not also pick up the capo.
+        const f = Math.max(n.f, capo);
+        const midi = open + f;
+        specNotes.push({ idx: i, s: n.s, f, midi, pc: pitchClassOf(midi) });
     }
     if (specNotes.length === 0) return null;
     const pitchSet = new Set(specNotes.map(n => n.midi));

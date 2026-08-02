@@ -1068,7 +1068,7 @@ test('displayFretOffset leaves the -1 no-slide sentinel untouched', () => {
     const effective = [40 + capo];
     const relCeiling = 20 - capo;
     // f: 8 → relative 3 (not 0), so this stays about the sl/slu sentinel,
-    // not the separate capo-floor-stays-open behavior above.
+    // not the separate relative-fret-0-stays-open behavior above.
     const bundle = makeBundle({ notes: [{ t: 0, s: 0, f: 8, sl: -1, slu: -1 }], tuning: [0] });
     createRetuner().apply(bundle, effective, relCeiling, capo);
     assert.deepStrictEqual({ f: bundle.notes[0].f, sl: bundle.notes[0].sl, slu: bundle.notes[0].slu },
@@ -1510,16 +1510,20 @@ test('capo cancellation identity for k = 1..4', (t) => {
     }
 });
 
-// A chart's own native capo (bundle.capo) always bakes into the physical
-// fret a bare target needs — never redisplayed as smaller relative numbers.
-test('a chart\'s own native capo always bakes into the physical fret', () => {
+// A chart's own native capo (bundle.capo) only raises an open string's
+// sounding pitch, not an already-fretted note's: any note at or below the
+// capo's fret (open, or a raw fret a real capo would physically block,
+// since a capo clamps every string at its own fret) sounds at the capo's
+// own fret; a note already fretted above the capo is already an absolute
+// position and stays exactly where it is.
+test('a chart\'s own native capo only raises notes at or below its fret', () => {
     const { createRetuner } = CR;
     const rawNotes = [
-        { t: 0, s: 0, f: 0 },  // open low E in the source, capo-relative
-        { t: 1, s: 1, f: 2 },
+        { t: 0, s: 0, f: 0 },  // open low E — capo clamps it up to fret 2
+        { t: 1, s: 1, f: 2 },  // exactly at the capo's own fret — same result
         { t: 2, s: 2, f: 2 },
     ];
-    const rawChords = [{ id: null, t: 3, notes: [{ t: 3, s: 3, f: 0 }, { t: 3, s: 4, f: 1 }] }];
+    const rawChords = [{ id: null, t: 3, notes: [{ t: 3, s: 3, f: 0 }, { t: 3, s: 4, f: 1 }] }]; // f=1 < capo: physically only reachable via the capo itself
     const rawAnchors = [{ time: 0, fret: 0, width: 3 }];
     const bundle = makeBundle({
         notes: rawNotes.map(n => ({ ...n })),
@@ -1528,8 +1532,13 @@ test('a chart\'s own native capo always bakes into the physical fret', () => {
         tuning: [0, 0, 0, 0, 0, 0], capo: 2,
     });
     createRetuner().apply(bundle, EADGBE.midiTuning, 24);
-    assert.deepStrictEqual(bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 1, f: 4 }, { s: 2, f: 4 }]);
-    assert.deepStrictEqual(bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 3, f: 2 }, { s: 4, f: 3 }]);
+    assert.deepStrictEqual(bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 1, f: 2 }, { s: 2, f: 2 }]);
+    assert.deepStrictEqual(bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 3, f: 2 }, { s: 4, f: 2 }]);
+    // No note here needs a finger (every string is open or at the capo's
+    // own fret, which the capo itself holds down) — remapAnchors excludes
+    // all of them as donors, falls back to the nearest note's own raw ->
+    // remapped change, and lands the anchor at fret 2, matching where
+    // every note in the passage actually sounds.
     assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 2, width: 3 }]);
 });
 
@@ -1539,22 +1548,25 @@ test('a chart\'s own native capo always bakes into the physical fret', () => {
 test('anchor donors include chord notes', () => {
     const { createRetuner } = CR;
     // No standalone notes at all -- only a chord, matching a pure rhythm-
-    // strum passage. sourceCapo=2 so a real shift is actually exercised.
+    // strum passage. Source tuning detunes the fretted strings +2
+    // semitones so a real shift is actually exercised on retune (chart
+    // capo, by contrast, only raises OPEN strings and wouldn't move
+    // these already-fretted notes at all).
     const rawChords = [{ id: null, t: 0, notes: [
-        { t: 0, s: 1, f: 2 }, { t: 0, s: 2, f: 2 }, { t: 0, s: 3, f: 2 }, { t: 0, s: 4, f: 0 },
+        { t: 0, s: 1, f: 4 }, { t: 0, s: 2, f: 4 }, { t: 0, s: 3, f: 4 }, { t: 0, s: 4, f: 0 },
     ] }];
-    // Deliberately NOT one of the chord's own retuned frets (4/4/4/2 below),
-    // so a stray "left at the raw fret" bug can't coincidentally pass.
+    // Deliberately NOT one of the chord's own retuned frets (6/6/6/0
+    // below), so a stray "left at the raw fret" bug can't coincidentally pass.
     const rawAnchors = [{ time: 0, fret: 0, width: 3 }];
     const bundle = makeBundle({
         chords: cloneChords(rawChords),
         anchors: cloneAnchors(rawAnchors),
-        tuning: [0, 0, 0, 0, 0, 0], capo: 2,
+        tuning: [0, 2, 2, 2, 0, 0],
     });
     createRetuner().apply(bundle, EADGBE.midiTuning, 24);
     const chordFrets = bundle.chords[0].notes.map(n => n.f);
-    assert.deepStrictEqual(chordFrets, [4, 4, 4, 2]);
-    assert.deepStrictEqual(bundle.anchors[0].fret, Math.min(...chordFrets));
+    assert.deepStrictEqual(chordFrets, [6, 6, 6, 0]);
+    assert.deepStrictEqual(bundle.anchors[0].fret, 2);
     assert.notStrictEqual(bundle.anchors[0].fret, rawAnchors[0].fret,
         'the anchor must not be left at its un-retuned original fret when the only nearby donor is a chord');
 });
