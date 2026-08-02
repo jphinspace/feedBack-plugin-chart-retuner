@@ -306,6 +306,29 @@ architecture from Phases 1-18:
   framework-agnostic — it only ever depended on `playerControlSlot()`, not
   the renderer).
 
+**Phase 20 — Physical-fret display shift, then a capo-floor exception
+(2026-08-02).** Phase 19 left notes capo-relative; a follow-up made the
+retuner capo (and the chart's own native capo) relabel every output fret
+to the physical position a bare, uncapo'd instrument actually needs — no
+capo bar is ever drawn, so a note at the floor is not shown as "open"
+(relative fret 0 → physical fret `capo`). Real-chart testing (Wonderwall
+rhythm, EADGBE target, retuner capo 2) found this broke chord legibility:
+renderers key "does this string need its own finger" off `fret === 0`
+(the default 2D highway's open-string bar + `nonZeroFrets`/bracket-span
+math; `highway_3d`'s `mergeChordShape`/chord-frame sizing) — once every
+capo-floor string reports a nonzero physical fret, a chord with several
+such strings reads as spanning the full distance from the floor to its
+highest fretted note, not the tighter shape it's actually played as.
+Fixed by keeping a note (and its chord template's slot) at fret 0 when
+its capo-relative fret is 0, rather than shifting it — deliberately
+chosen over scoring purity: the note's true sounding pitch still needs a
+real finger at the physical capo position, so a player who takes the
+open-string display literally, or a scorer reading `.f`, is off by
+`capo` semitones. Chord template frets follow the same rule as the note
+they classify, so a renderer merging live-note fret with template fret
+(`mergeChordShape`) doesn't have the note's real fret silently overwrite
+the template's "open" classification.
+
 ## Upstream sync log (historical — closed by Phase 19)
 
 Procedure: see PLANNING.md ("Syncing from upstream") — the pre-Phase-19

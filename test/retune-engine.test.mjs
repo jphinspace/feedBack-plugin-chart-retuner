@@ -1023,9 +1023,13 @@ const SPOT_FRETS = [0, 10, 20];
 
 // displayFretOffset: physical-fret display shift. The remap stays
 // capo-relative internally; the offset relabels notes/slides/chord
-// notes/anchors to physical frets, including relative fret 0 (no capo
-// bar rings it open unconditionally — scoring needs the true fret). Chord
-// template frets are the exception — see the block further down.
+// notes/anchors to physical frets — EXCEPT relative fret 0, which stays
+// 0 ("open") rather than becoming `capo`. No capo bar is drawn, so this
+// is a deliberate visual-consistency choice over scoring purity: the
+// note's true sounding pitch still needs a real finger at the capo
+// position, so a player/scorer taking the open-string display literally
+// gets the wrong pitch. Chosen anyway so renderers' fret===0 checks
+// (open-string bar, chord-bracket width) read correctly. See HISTORY.md.
 {
     const { createRetuner } = CR;
     const capo = 3;
@@ -1036,7 +1040,7 @@ const SPOT_FRETS = [0, 10, 20];
     const retuner = createRetuner();
     const rawNotes = [
         { t: 0, s: 0, f: 5 },        // sounds 45 → relative 2 → physical 5
-        { t: 1, s: 0, f: capo },     // sounds at the capo → relative 0 → physical == capo itself, not open
+        { t: 1, s: 0, f: capo },     // sounds at the capo → relative 0 → stays open (fret 0)
         { t: 2, s: 0, f: 2 },        // sounds below the capo → unplayable, drops
         { t: 3, s: 0, f: 7, sl: 9 }, // slide: both endpoints back to physical
     ];
@@ -1046,8 +1050,8 @@ const SPOT_FRETS = [0, 10, 20];
         tuning: [0], capo: 0, stringCount: 1,
     };
     retuner.apply(bundle, effective, relCeiling, capo);
-    check('displayFretOffset: fretted note comes back at its physical fret',
-        bundle.notes.map(n => n.f), [5, 3, 7]);
+    check('displayFretOffset: fretted note comes back at its physical fret, capo-floor note stays open',
+        bundle.notes.map(n => n.f), [5, 0, 7]);
     check('displayFretOffset: the below-capo note drops (physical frets start above the capo)',
         bundle.notes.some(n => n._origNote.f === 2), false);
     check('displayFretOffset: slide endpoint shifts with its note',
@@ -1069,7 +1073,7 @@ const SPOT_FRETS = [0, 10, 20];
     bundle.notes = rawNotes; bundle.anchors = rawAnchors;
     retuner.apply(bundle, effective, relCeiling, capo);
     check('displayFretOffset: restoring the offset re-derives physical frets',
-        bundle.notes.map(n => n.f), [5, 3, 7]);
+        bundle.notes.map(n => n.f), [5, 0, 7]);
 
     // Bogus offsets sanitize to 0 rather than shifting by garbage.
     bundle.notes = rawNotes; bundle.anchors = rawAnchors;
@@ -1086,23 +1090,23 @@ const SPOT_FRETS = [0, 10, 20];
     const effective = [40 + capo];
     const relCeiling = 20 - capo;
     const bundle = {
-        notes: [{ t: 0, s: 0, f: 5, sl: -1, slu: -1 }], chords: [], anchors: [], chordTemplates: [],
+        // f: 8 → relative 3 (not 0), so this stays about the sl/slu
+        // sentinel, not the separate capo-floor-stays-open behavior above.
+        notes: [{ t: 0, s: 0, f: 8, sl: -1, slu: -1 }], chords: [], anchors: [], chordTemplates: [],
         tuning: [0], capo: 0, stringCount: 1,
     };
     createRetuner().apply(bundle, effective, relCeiling, capo);
     check('displayFretOffset: a plain note\'s -1 sl/slu sentinel is untouched, not shifted into a fake slide',
         { f: bundle.notes[0].f, sl: bundle.notes[0].sl, slu: bundle.notes[0].slu },
-        { f: 5, sl: -1, slu: -1 });
+        { f: 8, sl: -1, slu: -1 });
 }
 
 // displayFretOffset across chords and templates: template frets shift
-// except the -1 "unused string" sentinel AND relative fret 0 (a capo-floor
-// slot stays template-fret 0 — unlike notes, template frets are read-only
-// display metadata the renderer uses to classify "no dedicated finger
-// here" for chord brackets/open-bar styling, never scored, so there's no
-// pitch reason to relabel them physical). Fingers untouched, and chord
-// instances follow their template's solved voicing into the ACTUAL
-// (physical) frets on the notes themselves — only the template disagrees.
+// except the -1 "unused string" sentinel AND relative fret 0, which stays
+// open — same rule as notes, so a renderer merging live note fret with
+// template fret (e.g. highway_3d's mergeChordShape) sees the two agree
+// instead of the note silently overwriting the template's "open"
+// classification with a nonzero physical fret. Fingers untouched.
 {
     const { createRetuner } = CR;
     const capo = 3;
@@ -1113,9 +1117,12 @@ const SPOT_FRETS = [0, 10, 20];
     const retuner = createRetuner();
     const rawTemplates = [
         { name: 'X', frets: [5, 7], fingers: [1, 3] },   // → relative [2, 4]
-        { name: 'Open-ish', frets: [3, -1], fingers: [0, -1] }, // string 0 AT the capo → template stays open, unused stays -1
+        { name: 'Open-ish', frets: [3, -1], fingers: [0, -1] }, // string 0 AT the capo → template AND note stay open, unused stays -1
     ];
-    const rawChords = [{ t: 0, id: 0, notes: [{ s: 0, f: 5 }, { s: 1, f: 7 }] }];
+    const rawChords = [
+        { t: 0, id: 0, notes: [{ s: 0, f: 5 }, { s: 1, f: 7 }] },
+        { t: 1, id: 1, notes: [{ s: 0, f: 3 }] },
+    ];
     const rawNotes = [];
     const bundle = {
         notes: rawNotes, chords: rawChords, anchors: [], chordTemplates: rawTemplates,
@@ -1133,6 +1140,8 @@ const SPOT_FRETS = [0, 10, 20];
         bundle.chordTemplates[1].frets, [0, -1]);
     check('displayFretOffset: chord instance notes land on the template\'s physical frets',
         bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 5 }, { s: 1, f: 7 }]);
+    check('displayFretOffset: a chord instance note at the capo floor stays open too, agreeing with its template',
+        bundle.chords[1].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 0 }]);
     check('displayFretOffset: raw template object is untouched',
         rawTemplates[0].frets, [5, 7]);
 }

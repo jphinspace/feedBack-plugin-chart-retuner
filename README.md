@@ -87,19 +87,21 @@ Two per-tuning adjustments on top of the string pitches themselves
   is the reverse. Save +1 on a cello profile and every bass chart plays
   an octave up by default.
 
-Every fret this plugin shows — and every open-string name — is the TRUE
-physical position/pitch on the target instrument's own bare neck, never
-relabeled relative to a capo. That applies whether the shift comes from
-the retuner capo above or from the chart's own native recorded capo: both
-fold directly into the physical fret a bare instrument needs, so what's
-on screen always matches what the instrument being played actually
-needs, and a note that would only "ring open" under a real capo is shown
-properly fretted instead — nothing about scoring pretends a real capo
-bar exists. The one exception is a chord's own bracket/shape: a string
-sitting exactly at the capo floor still reads as open there, since
-(without a real bar) it needs no dedicated finger beyond whatever else
-the hand is already doing, so it's excluded from how wide the chord
-shape looks.
+Every fretted note this plugin shows is the TRUE physical position on the
+target instrument's own bare neck, never relabeled relative to a capo —
+that applies whether the shift comes from the retuner capo above or from
+the chart's own native recorded capo. **One deliberate exception:** a
+note sitting exactly at the capo floor (the lowest reachable position)
+displays as open — same treatment as a real open string — instead of at
+its physical fret. No capo bar is actually drawn, so this is a visual
+choice, not a physical one: that string still needs a real finger there
+to sound correctly, and a player who takes the open-string display
+literally (or a scorer reading it) will land `capo` semitones flat. It's
+chosen anyway because it reads far more clearly — an untreated physical
+fret number there made chords look stretched across a wider span than
+they're actually played (nothing distinguished "needs its own finger"
+from "covered by the same capo-floor position every other open-at-the-
+floor string in the chord already sits on").
 
 Both live in two places:
 

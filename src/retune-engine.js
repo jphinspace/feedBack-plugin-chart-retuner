@@ -774,15 +774,14 @@ export function createRetuner(opts) {
         remappedAnchors = remapAnchors(rawAnchors, anchorDonors, maxFret);
         remappedTemplates = newTemplates;
 
-        // Physical-fret display shift: every note fret becomes r + capo,
-        // unconditionally (no capo bar is drawn, so r === 0 isn't "open" —
-        // the sounding pitch still needs a real finger at the capo
-        // position, so scoring must see the true physical fret).
+        // Physical-fret display shift: every fretted note becomes r + capo,
+        // except a note exactly at the capo floor (relative 0), which stays
+        // open — chosen for chord legibility over scoring purity.
         // _isRealFret guards sl/slu/template sentinels from the same shift.
         if (displayFretOffset > 0) {
             const off = displayFretOffset;
             const shiftNote = (n) => {
-                n.f += off;
+                if (n.f > 0) n.f += off;
                 if (_isRealFret(n.sl)) n.sl += off;
                 if (_isRealFret(n.slu)) n.slu += off;
             };
@@ -792,12 +791,8 @@ export function createRetuner(opts) {
             }
             remappedAnchors = remappedAnchors.map(
                 a => ({ time: a.time, fret: a.fret + off, width: a.width }));
-            // Template frets are display-only (chord-shape classification,
-            // never scored), so a slot at the capo floor (relative 0) stays
-            // 0 instead of shifting — the renderer keys its "no dedicated
-            // finger here" chord-bracket/open-bar treatment off the
-            // template, not the note, so this is what keeps a chord with a
-            // capo-floor string from reading as a wider stretch than it is.
+            // Template frets follow the same floor-stays-open rule as notes,
+            // so a renderer merging the two sees them agree.
             remappedTemplates = Array.isArray(remappedTemplates)
                 ? remappedTemplates.map(t => (t && Array.isArray(t.frets))
                     ? Object.assign({}, t, { frets: t.frets.map(f => (f > 0 ? f + off : f)) })
