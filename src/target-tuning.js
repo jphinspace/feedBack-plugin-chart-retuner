@@ -2,11 +2,12 @@
 // One of four modules chart-retune.js aggregates into `CR`. The chart-remap
 // math itself lives in retune-engine.js, which imports the constants below.
 
-import { parseTargetNote, midiToNoteLabel } from './pitch.js';
+import { parseTargetNote, midiToNoteLabel, SEMITONES_PER_OCTAVE } from './pitch.js';
 
 // Standard open-string MIDI pitches, low string first, by string count.
-// Same numbers as lib/song.py's _TUNING_BASE_MIDI.
-const STANDARD_OPEN_STRING_MIDI = {
+// Same numbers as lib/song.py's _TUNING_BASE_MIDI; screen.js's renderer
+// base-MIDI table reuses this one rather than keeping its own copy.
+export const STANDARD_OPEN_STRING_MIDI = {
     4: [28, 33, 38, 43],
     5: [23, 28, 33, 38, 43],
     6: [40, 45, 50, 55, 59, 64],
@@ -81,7 +82,7 @@ export function applyRetunerCapoOctaveOverride(profile, override) {
 // effectiveMaxFret below.
 export function effectiveTargetMidiTuning(midiTuning, capo, octaveOffset) {
     const c = capo | 0, oct = octaveOffset | 0;
-    return midiTuning.map(m => m + c - 12 * oct);
+    return midiTuning.map(m => m + c - SEMITONES_PER_OCTAVE * oct);
 }
 // Frets remaining above the capo. capo is validated < maxFret, so this
 // is always >= 1 for a valid profile.

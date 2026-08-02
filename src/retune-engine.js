@@ -10,19 +10,15 @@
 // solver) blocks in createRetuner below.
 
 import { DEFAULT_MAX_FRET, DEFAULT_TARGET_MIDI_TUNING, computeOpenStringMidiByString, computeArrangementShift } from './target-tuning.js';
-import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES } from './chord-solver.js';
+import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES, isFretted, isOpen, isRealFret } from './chord-solver.js';
 
 const _clampFret = (f, maxFret) => Math.max(0, Math.min(maxFret, f));
-
-// A real fret is a non-negative integer; anything else (e.g. -1) means
-// "not applicable" for a sl/slu field or a template's per-string slot.
-const _isRealFret = (v) => Number.isInteger(v) && v >= 0;
 
 // A note's slide destination and which field carries it (sl wins if both
 // are set); null if it isn't sliding.
 function _slideTarget(note) {
-    if (_isRealFret(note.sl)) return { field: 'sl', to: note.sl };
-    if (_isRealFret(note.slu)) return { field: 'slu', to: note.slu };
+    if (isRealFret(note.sl)) return { field: 'sl', to: note.sl };
+    if (isRealFret(note.slu)) return { field: 'slu', to: note.slu };
     return null;
 }
 
@@ -188,14 +184,14 @@ const ANCHOR_MAX_SPLITS = 5;
 export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET) {
     if (!Array.isArray(anchors) || anchors.length === 0) return anchors || [];
     if (!Array.isArray(remappedNotes) || remappedNotes.length === 0) return anchors.slice();
-    const fretted = remappedNotes.filter(n => n._origNote.f > 0);
+    const fretted = remappedNotes.filter(n => isFretted(n._origNote.f));
     const donors = fretted.length ? fretted : remappedNotes;
     const revoicedOf = n => n._crRevoiced === true;
     // Revoiced is only untrustworthy for hand-position purposes above
     // degradeLevel 0 (notes actually dropped, not just refingered).
     const untrustworthy = n => revoicedOf(n) && n._crDegradeLevel !== 0;
     // Widen/split candidates: every target-fretted, trustworthy note.
-    const targetFretted = remappedNotes.filter(n => n.f > 0 && !untrustworthy(n));
+    const targetFretted = remappedNotes.filter(n => isFretted(n.f) && !untrustworthy(n));
     const out = [];
     let ptr = 0;
     let cPtr = 0;
@@ -337,7 +333,7 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
     // chart already had (compares `_origNote`). Always eligible: a side
     // newly fretted (open in the source, fretted now), or notes sharing
     // one source string (a slide). No `_origNote` -> fires unconditionally.
-    const becameFretted = (note) => note._origNote && note._origNote.f === 0 && note.f > 0;
+    const becameFretted = (note) => note._origNote && isOpen(note._origNote.f) && isFretted(note.f);
     const notWorsenedBySource = (a, b, postGap) => {
         const oa = a._origNote, ob = b._origNote;
         if (!oa || !ob || oa.s === ob.s || becameFretted(a) || becameFretted(b)) return false;
@@ -364,9 +360,9 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
             // against its NEW position instead of its natural one,
             // letting it drift string to string pass after pass instead
             // of ever converging.
-            if (n.f <= 0 || !isEligible(n) || n._natS !== undefined || isSlide(n)) { i++; continue; }
+            if (!isFretted(n.f) || !isEligible(n) || n._natS !== undefined || isSlide(n)) { i++; continue; }
             let end = i + 1;
-            while (end < notes.length && isEligible(notes[end]) && notes[end].f > 0 && !isSlide(notes[end]) && sameOrigin(notes[end], n)) end++;
+            while (end < notes.length && isEligible(notes[end]) && isFretted(notes[end].f) && !isSlide(notes[end]) && sameOrigin(notes[end], n)) end++;
             const runStart = notes[i], runEnd = notes[end - 1];
             const prev = i > 0 ? notes[i - 1] : null;
             const next = end < notes.length ? notes[end] : null;
@@ -438,7 +434,7 @@ export function remapChordTemplate(sourceOpenMidiByString, naturalTargetByString
     const notes = [];
     for (let si = 0; si < template.frets.length; si++) {
         const f = template.frets[si];
-        if (_isRealFret(f)) notes.push({ s: si, f });
+        if (isRealFret(f)) notes.push({ s: si, f });
     }
     const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, notes, targetMidiTuning, maxFret);
     const target = targetMidiTuning || DEFAULT_TARGET_MIDI_TUNING;
@@ -608,7 +604,7 @@ export function createRetuner(opts) {
             if (!template || !Array.isArray(template.frets)) return template;
             const tNotes = [];
             for (let si = 0; si < template.frets.length; si++) {
-                if (_isRealFret(template.frets[si])) tNotes.push({ s: si, f: template.frets[si] });
+                if (isRealFret(template.frets[si])) tNotes.push({ s: si, f: template.frets[si] });
             }
             // Single-note / empty templates keep the per-note
             // path (identical to the pre-solver behavior).
@@ -647,7 +643,7 @@ export function createRetuner(opts) {
                     carried = new Array(target.length).fill(-1);
                     for (const pl of solved.placements) {
                         const c = template.fingers[tNotes[pl.srcIndex].s] ?? -1;
-                        if (c >= 0 && (c === 0) !== (pl.f === 0)) { carried = null; break; }
+                        if (isRealFret(c) && isOpen(c) !== isOpen(pl.f)) { carried = null; break; }
                         carried[pl.s] = c;
                     }
                 }
@@ -777,13 +773,13 @@ export function createRetuner(opts) {
         // Physical-fret display shift: every fretted note becomes r + capo,
         // except a note exactly at the capo floor (relative 0), which stays
         // open — chosen for chord legibility over scoring purity.
-        // _isRealFret guards sl/slu/template sentinels from the same shift.
+        // isRealFret guards sl/slu/template sentinels from the same shift.
         if (displayFretOffset > 0) {
             const off = displayFretOffset;
             const shiftNote = (n) => {
-                if (n.f > 0) n.f += off;
-                if (_isRealFret(n.sl)) n.sl += off;
-                if (_isRealFret(n.slu)) n.slu += off;
+                if (isFretted(n.f)) n.f += off;
+                if (isRealFret(n.sl)) n.sl += off;
+                if (isRealFret(n.slu)) n.slu += off;
             };
             for (const n of remappedNotes) shiftNote(n);
             for (const ch of remappedChords) {
@@ -795,7 +791,7 @@ export function createRetuner(opts) {
             // so a renderer merging the two sees them agree.
             remappedTemplates = Array.isArray(remappedTemplates)
                 ? remappedTemplates.map(t => (t && Array.isArray(t.frets))
-                    ? Object.assign({}, t, { frets: t.frets.map(f => (f > 0 ? f + off : f)) })
+                    ? Object.assign({}, t, { frets: t.frets.map(f => (isFretted(f) ? f + off : f)) })
                     : t)
                 : remappedTemplates;
         }

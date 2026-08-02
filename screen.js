@@ -179,20 +179,14 @@ import { CR } from './src/chart-retune.js';
         }
     };
 
-    // Standard open-string base MIDI by string count — same table as lib/song.py's
-    // base_open_string_midis, so a consuming renderer's own base + this plugin's
-    // returned tuning offsets/capo reconstruct the right pitch for nut labels.
-    const _BASE_OPEN_MIDI = {
-        4: [28, 33, 38, 43],
-        5: [23, 28, 33, 38, 43],
-        6: [40, 45, 50, 55, 59, 64],
-        7: [35, 40, 45, 50, 55, 59, 64],
-        8: [30, 35, 40, 45, 50, 55, 59, 64],
-    };
+    // Renderer base MIDI by string count, for reconstructing nut-label
+    // pitches from this plugin's returned tuning offsets/capo — reuses
+    // CR.STANDARD_OPEN_STRING_MIDI rather than a second hardcoded copy.
     function _rendererBaseOpenMidi(n, isBass) {
+        const table = CR.STANDARD_OPEN_STRING_MIDI;
         const base = (n === 4 || n === 5)
-            ? (isBass ? _BASE_OPEN_MIDI[n] : _BASE_OPEN_MIDI[6].slice(0, n))
-            : (_BASE_OPEN_MIDI[n] || _BASE_OPEN_MIDI[6]);
+            ? (isBass ? table[n] : table[6].slice(0, n))
+            : (table[n] || table[6]);
         return base.slice();
     }
 

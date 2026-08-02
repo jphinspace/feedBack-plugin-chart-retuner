@@ -20,7 +20,7 @@
 // `revoiced` and `degradeLevel` (which step won); no candidate solving
 // returns null.
 
-import { notePitchClass } from './pitch.js';
+import { notePitchClass, pitchClassOf } from './pitch.js';
 import { DEFAULT_MAX_FRET } from './target-tuning.js';
 
 // Max fretted-fret difference within one chord (a four-fret box). A
@@ -59,9 +59,11 @@ export const SOLVER_WEIGHTS = {
     DEGRADE_LEVEL: 500,     // per degradation-ladder level
 };
 
-function pcOf(midi) {
-    return ((midi % 12) + 12) % 12;
-}
+// Fret/finger-field convention shared with retune-engine.js: -1 = not
+// applicable, 0 = open (no dedicated finger), n > 0 = fretted/finger number.
+export function isFretted(v) { return v > 0; }
+export function isOpen(v) { return v === 0; }
+export function isRealFret(v) { return Number.isInteger(v) && v >= 0; }
 
 // Root (and slash bass, if any) pitch class from a chord template name.
 // Returns null unless the name starts with a note letter (GP imports
@@ -103,7 +105,7 @@ function _contiguousRuns(frettedSortedByString) {
 // mini-barre. Open strings are free. Deliberately permissive, since this
 // only gates playability (computeChordFingers below draws diagrams).
 export function fingersNeeded(voicing) {
-    const fretted = voicing.filter(n => n.f > 0).sort((a, b) => a.s - b.s);
+    const fretted = voicing.filter(n => isFretted(n.f)).sort((a, b) => a.s - b.s);
     if (fretted.length === 0) return 0;
     let minF = Infinity;
     for (const n of fretted) if (n.f < minF) minF = n.f;
@@ -117,7 +119,7 @@ export function fingersNeeded(voicing) {
 // lowest barred string up, so it's invalid when an open note sounds on
 // any string at or above that point.
 export function barreIsValid(voicing) {
-    const fretted = voicing.filter(n => n.f > 0);
+    const fretted = voicing.filter(n => isFretted(n.f));
     if (fretted.length < 2) return false;
     let minF = Infinity;
     for (const n of fretted) if (n.f < minF) minF = n.f;
@@ -128,7 +130,7 @@ export function barreIsValid(voicing) {
         if (n.s < barreLowS) barreLowS = n.s;
     }
     if (atMin < 2) return false;
-    return !voicing.some(n => n.f === 0 && n.s >= barreLowS);
+    return !voicing.some(n => isOpen(n.f) && n.s >= barreLowS);
 }
 
 // Hard playability check against the source chord's own difficulty:
@@ -136,7 +138,7 @@ export function barreIsValid(voicing) {
 // within max(MAX_FRETTING_FINGERS, source fingers). Anything the source
 // chord itself demanded stays allowed (it was in the chart).
 export function voicingPlayable(voicing, spec) {
-    const fretted = voicing.filter(n => n.f > 0);
+    const fretted = voicing.filter(n => isFretted(n.f));
     if (fretted.length > 1) {
         let minF = Infinity, maxF = -Infinity;
         for (const n of fretted) { if (n.f < minF) minF = n.f; if (n.f > maxF) maxF = n.f; }
@@ -158,7 +160,7 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) 
         const open = sourceOpenMidiByString[n.s];
         if (open === null || open === undefined) continue;
         const midi = open + n.f;
-        specNotes.push({ idx: i, s: n.s, f: n.f, midi, pc: pcOf(midi) });
+        specNotes.push({ idx: i, s: n.s, f: n.f, midi, pc: pitchClassOf(midi) });
     }
     if (specNotes.length === 0) return null;
     const pitchSet = new Set(specNotes.map(n => n.midi));
@@ -167,7 +169,7 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) 
     for (const n of specNotes) pcCounts.set(n.pc, (pcCounts.get(n.pc) || 0) + 1);
     let bassMidi = Infinity;
     for (const n of specNotes) if (n.midi < bassMidi) bassMidi = n.midi;
-    const fretted = specNotes.filter(n => n.f > 0);
+    const fretted = specNotes.filter(n => isFretted(n.f));
     let minFretted = null, span = 0;
     if (fretted.length > 0) {
         let minF = Infinity, maxF = -Infinity;
@@ -175,7 +177,7 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) 
         minFretted = minF;
         span = maxF - minF;
     }
-    let rootPc = pcOf(bassMidi);
+    let rootPc = pitchClassOf(bassMidi);
     let bassPc = null;
     const named = parseChordRootFromName(templateName);
     if (named && pcs.has(named.rootPc)) {
@@ -205,7 +207,7 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName) 
 // intervals actually present in the source chord are required.
 export function degradationLadder(spec) {
     const has = pc => spec.pcs.has(pc);
-    const iv = semis => pcOf(spec.rootPc + semis);
+    const iv = semis => pitchClassOf(spec.rootPc + semis);
     const third = [4, 3].map(iv).find(has);
     const fifth = [7, 6, 8].map(iv).find(has);
     const levels = [new Set(spec.pcs)];
@@ -240,7 +242,7 @@ export function scoreVoicing(spec, voicing) {
     for (const n of voicing) {
         if (!spec.pitchSet.has(n.midi)) cost += W.EXACT_PITCH_MISS;
         if (n.midi < minMidi) { minMidi = n.midi; minMidiPc = n.pc; }
-        if (n.f === 0) openCount += 1;
+        if (isOpen(n.f)) openCount += 1;
         else if (minFretted === null || n.f < minFretted) minFretted = n.f;
         if (n.s < minS) minS = n.s;
         if (n.s > maxS) maxS = n.s;
@@ -306,12 +308,12 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
         for (let j = 0; j < nStr; j++) {
             const open = target[j];
             const list = [null];
-            const openBit = pcBit.get(pcOf(open));
-            if (openBit !== undefined) list.push({ s: j, f: 0, midi: open, pc: pcOf(open), bit: openBit });
+            const openBit = pcBit.get(pitchClassOf(open));
+            if (openBit !== undefined) list.push({ s: j, f: 0, midi: open, pc: pitchClassOf(open), bit: openBit });
             for (let f = p; f <= p + allowedSpan && f <= maxFret; f++) {
                 const midi = open + f;
-                const bit = pcBit.get(pcOf(midi));
-                if (bit !== undefined) list.push({ s: j, f, midi, pc: pcOf(midi), bit });
+                const bit = pcBit.get(pitchClassOf(midi));
+                if (bit !== undefined) list.push({ s: j, f, midi, pc: pitchClassOf(midi), bit });
             }
             cands.push(list);
         }
@@ -442,12 +444,12 @@ export function computeChordFingers(fretsByTargetString) {
     const voicing = [];
     for (let s = 0; s < n; s++) {
         const f = fretsByTargetString[s];
-        if (f === 0) fingers[s] = 0;
-        else if (f > 0) voicing.push({ s, f });
+        if (isOpen(f)) fingers[s] = 0;
+        else if (isFretted(f)) voicing.push({ s, f });
         // fingers[s] stays -1 for unused strings
     }
     if (voicing.length === 0) return fingers;
-    const all = fretsByTargetString.map((f, s) => ({ s, f })).filter(x => x.f >= 0);
+    const all = fretsByTargetString.map((f, s) => ({ s, f })).filter(x => isRealFret(x.f));
     const byString = voicing.slice().sort((a, b) => a.s - b.s);
     const minF = Math.min(...voicing.map(x => x.f));
     const atMin = byString.filter(x => x.f === minF);
@@ -464,7 +466,7 @@ export function computeChordFingers(fretsByTargetString) {
     // Mini-barre fallback: contiguous same-fret runs share a finger.
     const runs = _contiguousRuns(rest).sort((a, b) => a.f - b.f || a.minS - b.minS);
     if (next - 1 + runs.length > MAX_FRETTING_FINGERS) {
-        return new Array(n).fill(-1).map((v, s) => (fretsByTargetString[s] === 0 ? 0 : -1)); // ambiguous
+        return new Array(n).fill(-1).map((v, s) => (isOpen(fretsByTargetString[s]) ? 0 : -1)); // ambiguous
     }
     for (const run of runs) {
         for (const x of run.notes) fingers[x.s] = next;

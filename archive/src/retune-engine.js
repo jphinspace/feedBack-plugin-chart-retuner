@@ -10,7 +10,7 @@
 // solver) blocks in createRetuner below.
 
 import { DEFAULT_MAX_FRET, DEFAULT_TARGET_MIDI_TUNING, computeOpenStringMidiByString, computeArrangementShift } from './target-tuning.js';
-import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES } from './chord-solver.js';
+import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES, isFretted, isOpen, isRealFret } from './chord-solver.js';
 
 const _clampFret = (f, maxFret) => Math.max(0, Math.min(maxFret, f));
 
@@ -127,8 +127,8 @@ export function noteHalfstepRank(sourceOpenMidi, fret) {
 
 // Dispatches to remapSlide when the note carries sl/slu, else remapNote.
 export function remapNoteEntry(sourceOpenMidi, naturalTargetString, note, targetMidiTuning, maxFret = DEFAULT_MAX_FRET) {
-    const hasSl = Number.isInteger(note.sl) && note.sl >= 0;
-    const hasSlu = !hasSl && Number.isInteger(note.slu) && note.slu >= 0;
+    const hasSl = isRealFret(note.sl);
+    const hasSlu = !hasSl && isRealFret(note.slu);
     if (hasSl || hasSlu) {
         const dest = hasSl ? note.sl : note.slu;
         const r = remapSlide(sourceOpenMidi, naturalTargetString, note.f, dest, targetMidiTuning, maxFret);
@@ -178,7 +178,7 @@ const ANCHOR_MAX_SPLITS = 5;
 export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET) {
     if (!Array.isArray(anchors) || anchors.length === 0) return anchors || [];
     if (!Array.isArray(remappedNotes) || remappedNotes.length === 0) return anchors.slice();
-    const fretted = remappedNotes.filter(n => n._origNote.f > 0);
+    const fretted = remappedNotes.filter(n => isFretted(n._origNote.f));
     const donors = fretted.length ? fretted : remappedNotes;
     const revoicedOf = n => n._crRevoiced === true;
     // Widen/split candidates: every target-fretted note, whether or not
@@ -186,7 +186,7 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET)
     // can strand an already-fretted note outside the donor band too).
     // Revoiced notes are excluded — their fret can be a nonsense
     // pitch-solver artifact, not a real hand-position destination.
-    const targetFretted = remappedNotes.filter(n => n.f > 0 && !revoicedOf(n));
+    const targetFretted = remappedNotes.filter(n => isFretted(n.f) && !revoicedOf(n));
     const out = [];
     let ptr = 0;
     let cPtr = 0;
@@ -328,7 +328,7 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
     // chart already had (compares `_origNote`). Always eligible: a side
     // newly fretted (open in the source, fretted now), or notes sharing
     // one source string (a slide). No `_origNote` -> fires unconditionally.
-    const becameFretted = (note) => note._origNote && note._origNote.f === 0 && note.f > 0;
+    const becameFretted = (note) => note._origNote && isOpen(note._origNote.f) && isFretted(note.f);
     const notWorsenedBySource = (a, b, postGap) => {
         const oa = a._origNote, ob = b._origNote;
         if (!oa || !ob || oa.s === ob.s || becameFretted(a) || becameFretted(b)) return false;
@@ -343,8 +343,7 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
     // A slide's start and end fret are both computed for the SAME target
     // string (remapSlide); relocating just the start note here would
     // leave its `.sl`/`.slu` endpoint stranded on the string it left.
-    const isSlide = (note) => (Number.isInteger(note.sl) && note.sl >= 0)
-        || (Number.isInteger(note.slu) && note.slu >= 0);
+    const isSlide = (note) => isRealFret(note.sl) || isRealFret(note.slu);
 
     for (let pass = 0; pass < HAND_TRAVEL_MAX_PASSES; pass++) {
         let changed = false;
@@ -356,9 +355,9 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
             // against its NEW position instead of its natural one,
             // letting it drift string to string pass after pass instead
             // of ever converging.
-            if (n.f <= 0 || !isEligible(n) || n._natS !== undefined || isSlide(n)) { i++; continue; }
+            if (!isFretted(n.f) || !isEligible(n) || n._natS !== undefined || isSlide(n)) { i++; continue; }
             let end = i + 1;
-            while (end < notes.length && isEligible(notes[end]) && notes[end].f > 0 && !isSlide(notes[end]) && sameOrigin(notes[end], n)) end++;
+            while (end < notes.length && isEligible(notes[end]) && isFretted(notes[end].f) && !isSlide(notes[end]) && sameOrigin(notes[end], n)) end++;
             const runStart = notes[i], runEnd = notes[end - 1];
             const prev = i > 0 ? notes[i - 1] : null;
             const next = end < notes.length ? notes[end] : null;
@@ -430,7 +429,7 @@ export function remapChordTemplate(sourceOpenMidiByString, naturalTargetByString
     const notes = [];
     for (let si = 0; si < template.frets.length; si++) {
         const f = template.frets[si];
-        if (f >= 0) notes.push({ s: si, f });
+        if (isRealFret(f)) notes.push({ s: si, f });
     }
     const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, notes, targetMidiTuning, maxFret);
     const target = targetMidiTuning || DEFAULT_TARGET_MIDI_TUNING;
@@ -639,7 +638,7 @@ export function createRetuner(opts) {
                     carried = new Array(target.length).fill(-1);
                     for (const pl of solved.placements) {
                         const c = template.fingers[tNotes[pl.srcIndex].s] ?? -1;
-                        if (c >= 0 && (c === 0) !== (pl.f === 0)) { carried = null; break; }
+                        if (isRealFret(c) && isOpen(c) !== isOpen(pl.f)) { carried = null; break; }
                         carried[pl.s] = c;
                     }
                 }
@@ -717,8 +716,7 @@ export function createRetuner(opts) {
                 // solution is solved from PLAIN frets, which only anchors
                 // a static position. The ad-hoc path below goes through
                 // remapNoteEntry/remapSlide instead, keeping slides exact.
-                const hasSlide = chNotes.some(n => (Number.isInteger(n.sl) && n.sl >= 0)
-                    || (Number.isInteger(n.slu) && n.slu >= 0));
+                const hasSlide = chNotes.some(n => isRealFret(n.sl) || isRealFret(n.slu));
                 if (!hasSlide && byString && tmpl && chNotes.length > 0
                     && chNotes.every(n => tmpl.frets[n.s] === n.f && byString.has(n.s))) {
                     // One note per source string: a malformed chart
@@ -758,9 +756,9 @@ export function createRetuner(opts) {
         if (displayFretOffset > 0) {
             const off = displayFretOffset;
             const shiftNote = (n) => {
-                if (n.f > 0) n.f += off;
-                if (Number.isInteger(n.sl) && n.sl >= 0) n.sl += off;
-                if (Number.isInteger(n.slu) && n.slu >= 0) n.slu += off;
+                if (isFretted(n.f)) n.f += off;
+                if (isRealFret(n.sl)) n.sl += off;
+                if (isRealFret(n.slu)) n.slu += off;
             };
             for (const n of remappedNotes) shiftNote(n);
             for (const ch of remappedChords) {
@@ -770,7 +768,7 @@ export function createRetuner(opts) {
                 a => ({ time: a.time, fret: a.fret + off, width: a.width }));
             remappedTemplates = Array.isArray(remappedTemplates)
                 ? remappedTemplates.map(t => (t && Array.isArray(t.frets))
-                    ? Object.assign({}, t, { frets: t.frets.map(f => (f > 0 ? f + off : f)) })
+                    ? Object.assign({}, t, { frets: t.frets.map(f => (isFretted(f) ? f + off : f)) })
                     : t)
                 : remappedTemplates;
         }
@@ -877,9 +875,9 @@ export function canFoldSourceCapo(bundle, sourceCapo) {
     const notes = Array.isArray(bundle.notes) ? bundle.notes : [];
     const chordNotes = Array.isArray(bundle.chords) ? bundle.chords.flatMap(c => c.notes || []) : [];
     for (const n of notes.concat(chordNotes)) {
-        if (n.f > 0 && n.f < sourceCapo) return false;
-        if (Number.isInteger(n.sl) && n.sl > 0 && n.sl < sourceCapo) return false;
-        if (Number.isInteger(n.slu) && n.slu > 0 && n.slu < sourceCapo) return false;
+        if (isFretted(n.f) && n.f < sourceCapo) return false;
+        if (Number.isInteger(n.sl) && isFretted(n.sl) && n.sl < sourceCapo) return false;
+        if (Number.isInteger(n.slu) && isFretted(n.slu) && n.slu < sourceCapo) return false;
     }
     const anchors = Array.isArray(bundle.anchors) ? bundle.anchors : [];
     for (const a of anchors) {
@@ -887,7 +885,7 @@ export function canFoldSourceCapo(bundle, sourceCapo) {
     }
     const templates = Array.isArray(bundle.chordTemplates) ? bundle.chordTemplates : [];
     for (const t of templates) {
-        if (Array.isArray(t.frets) && t.frets.some(f => f > 0 && f < sourceCapo)) return false;
+        if (Array.isArray(t.frets) && t.frets.some(f => isFretted(f) && f < sourceCapo)) return false;
     }
     return true;
 }
@@ -903,14 +901,14 @@ export function applySourceCapoFold(bundle, sourceCapo) {
     const notes = Array.isArray(bundle.notes) ? bundle.notes : [];
     const chordNotes = Array.isArray(bundle.chords) ? bundle.chords.flatMap(c => c.notes || []) : [];
     for (const n of notes.concat(chordNotes)) {
-        if (n.f > 0) n.f -= sourceCapo;
-        if (Number.isInteger(n.sl) && n.sl > 0) n.sl -= sourceCapo;
-        if (Number.isInteger(n.slu) && n.slu > 0) n.slu -= sourceCapo;
+        if (isFretted(n.f)) n.f -= sourceCapo;
+        if (Number.isInteger(n.sl) && isFretted(n.sl)) n.sl -= sourceCapo;
+        if (Number.isInteger(n.slu) && isFretted(n.slu)) n.slu -= sourceCapo;
     }
     const anchors = Array.isArray(bundle.anchors) ? bundle.anchors : [];
     for (const a of anchors) a.fret -= sourceCapo;
     const templates = Array.isArray(bundle.chordTemplates) ? bundle.chordTemplates : [];
     for (const t of templates) {
-        if (Array.isArray(t.frets)) t.frets = t.frets.map(f => (f > 0 ? f - sourceCapo : f));
+        if (Array.isArray(t.frets)) t.frets = t.frets.map(f => (isFretted(f) ? f - sourceCapo : f));
     }
 }
