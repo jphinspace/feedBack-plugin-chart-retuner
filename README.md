@@ -94,7 +94,12 @@ the retuner capo above or from the chart's own native recorded capo: both
 fold directly into the physical fret a bare instrument needs, so what's
 on screen always matches what the instrument being played actually
 needs, and a note that would only "ring open" under a real capo is shown
-properly fretted instead.
+properly fretted instead — nothing about scoring pretends a real capo
+bar exists. The one exception is a chord's own bracket/shape: a string
+sitting exactly at the capo floor still reads as open there, since
+(without a real bar) it needs no dedicated finger beyond whatever else
+the hand is already doing, so it's excluded from how wide the chord
+shape looks.
 
 Both live in two places:
 

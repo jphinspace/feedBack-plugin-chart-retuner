@@ -1022,9 +1022,10 @@ const SPOT_FRETS = [0, 10, 20];
 }
 
 // displayFretOffset: physical-fret display shift. The remap stays
-// capo-relative internally; the offset relabels EVERY output (notes,
-// slides, chord notes, template frets, anchors) to physical frets,
-// including relative fret 0 (no capo bar rings it open unconditionally).
+// capo-relative internally; the offset relabels notes/slides/chord
+// notes/anchors to physical frets, including relative fret 0 (no capo
+// bar rings it open unconditionally — scoring needs the true fret). Chord
+// template frets are the exception — see the block further down.
 {
     const { createRetuner } = CR;
     const capo = 3;
@@ -1095,9 +1096,13 @@ const SPOT_FRETS = [0, 10, 20];
 }
 
 // displayFretOffset across chords and templates: template frets shift
-// except the -1 "unused string" sentinel (0/open is NOT preserved — see the
-// block above), fingers untouched, and chord instances follow their
-// template's solved voicing into the same physical frets.
+// except the -1 "unused string" sentinel AND relative fret 0 (a capo-floor
+// slot stays template-fret 0 — unlike notes, template frets are read-only
+// display metadata the renderer uses to classify "no dedicated finger
+// here" for chord brackets/open-bar styling, never scored, so there's no
+// pitch reason to relabel them physical). Fingers untouched, and chord
+// instances follow their template's solved voicing into the ACTUAL
+// (physical) frets on the notes themselves — only the template disagrees.
 {
     const { createRetuner } = CR;
     const capo = 3;
@@ -1108,7 +1113,7 @@ const SPOT_FRETS = [0, 10, 20];
     const retuner = createRetuner();
     const rawTemplates = [
         { name: 'X', frets: [5, 7], fingers: [1, 3] },   // → relative [2, 4]
-        { name: 'Open-ish', frets: [3, -1], fingers: [0, -1] }, // string 0 AT the capo → physically fretted, not open
+        { name: 'Open-ish', frets: [3, -1], fingers: [0, -1] }, // string 0 AT the capo → template stays open, unused stays -1
     ];
     const rawChords = [{ t: 0, id: 0, notes: [{ s: 0, f: 5 }, { s: 1, f: 7 }] }];
     const rawNotes = [];
@@ -1124,8 +1129,8 @@ const SPOT_FRETS = [0, 10, 20];
     // touches the frets, leaving fingers exactly as solved.
     check('displayFretOffset: template fingers are untouched by the shift',
         bundle.chordTemplates[0].fingers, [1, 2]);
-    check('displayFretOffset: an at-the-capo template note becomes physically fretted (no longer 0), unused stays -1',
-        bundle.chordTemplates[1].frets, [3, -1]);
+    check('displayFretOffset: an at-the-capo template slot stays open (fret 0), unused stays -1',
+        bundle.chordTemplates[1].frets, [0, -1]);
     check('displayFretOffset: chord instance notes land on the template\'s physical frets',
         bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 5 }, { s: 1, f: 7 }]);
     check('displayFretOffset: raw template object is untouched',
