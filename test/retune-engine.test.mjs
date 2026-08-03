@@ -434,9 +434,9 @@ test('createRetuner anchor split end-to-end (Drop C onto BEADG)', () => {
     });
     createRetuner().apply(bundle, beadgTarget, beadg.maxFret, 0);
     assert.deepStrictEqual(bundle.anchors, [
-            { time: 12, fret: 6, width: 4 },
-            { time: 15.75, fret: 1, width: 4 },
-            { time: 16, fret: 6, width: 4 },
+            { time: 12, fret: 6, width: 3 },
+            { time: 15.75, fret: 1, width: 3 },
+            { time: 16, fret: 6, width: 3 },
         ]);
 });
 
@@ -1039,7 +1039,7 @@ test('displayFretOffset: physical-fret display shift', () => {
     assert.deepStrictEqual(bundle.notes.map(n => n.f), [5, 0, 7]);
     assert.deepStrictEqual(bundle.notes.some(n => n.origNote.f === 2), false);
     assert.deepStrictEqual(bundle.notes[2].sl, 9);
-    assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 5, width: 4 }]);
+    assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 5, width: 3 }]);
     assert.notStrictEqual(bundle.anchors[0], rawAnchors[0],
         'shifted anchors must be fresh objects — the raw chart anchor must never be mutated');
     assert.deepStrictEqual(rawAnchors[0], { time: 0, fret: 5, width: 4 });
@@ -1813,16 +1813,22 @@ test('createRetuner end-to-end: revoiced bucket notes and anchor donor fallback'
     assert.ok(bucketNotes.length >= 1, 'revoiced bucket has at least one note');
     assert.ok(bucketNotes.every(n => n.crRevoiced === true), 'revoiced bucket notes are tagged');
     assert.deepStrictEqual(nearBundle.notes.find(n => n.t === 0.6).crRevoiced, false);
-    assert.deepStrictEqual(nearBundle.anchors, [{ time: 0, fret: 1, width: 4 }]);
+    assert.deepStrictEqual(nearBundle.anchors, [{ time: 0, fret: 1, width: 3 }]);
 
     // Same chart with the exact note pushed past the window: the anchor
-    // falls back to the first revoiced donor's own adjustment.
+    // falls back to the first revoiced donor's own adjustment, and the
+    // far note (30s later, outside the widen window) splits into its
+    // own anchor rather than being silently absorbed.
     const far = createRetuner();
     const farRaw = mkRaw(30);
     const farBundle = mkBundle(farRaw);
     far.apply(farBundle, eadg);
     const donor = farBundle.notes[0]; // first (time-sorted) fretted note at t=0
     const expected = Math.max(0, Math.min(20, 1 + donor.f - donor.origNote.f));
-    assert.deepStrictEqual(farBundle.anchors, [{ time: 0, fret: expected, width: 4 }]);
+    const farNote = farBundle.notes.find(n => n.t === 30);
+    assert.deepStrictEqual(farBundle.anchors, [
+        { time: 0, fret: expected, width: 3 },
+        { time: 30, fret: farNote.f, width: 3 },
+    ]);
     assert.notStrictEqual(expected, 1, 'fallback case actually differs from the exact adjustment');
 });

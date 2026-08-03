@@ -127,6 +127,19 @@ test('scoreVoicing: the source voicing itself scores 0', () => {
     assert.ok(gap > 0, 'score: dropping an inner note costs > 0');
 });
 
+// A >=2-fret interior peak costs more than a real barre technique; open D's 1-fret peak is exempt.
+test('scoreVoicing: interior peaks cost more, but a 1-fret peak like open D does not', () => {
+    const spec = chordSpecFromNotes(E_STD, v([[0, 0], [1, 4], [2, 4], [3, 0], [4, 5], [5, 5]]), 'F#m7');
+    const zigzag = vm(E_STD, [[0, 2], [1, 0], [2, 4], [3, 2], [4, 2], [5, 0]]); // fret 4 peak on string 2
+    const barre = vm(E_STD, [[0, 2], [1, 4], [2, 4], [3, 2], [4, 5], [5, 5]]);
+    assert.ok(scoreVoicing(spec, zigzag) > scoreVoicing(spec, barre),
+        'a real barre technique must score better than an unplayable interior-peak shape');
+
+    const dSpec = chordSpecFromNotes(E_STD, v([[2, 0], [3, 2], [4, 3], [5, 2]]), 'D');
+    const openD = vm(E_STD, [[2, 0], [3, 2], [4, 3], [5, 2]]);
+    assert.deepStrictEqual(scoreVoicing(dSpec, openD), 0, 'open D\'s 1-fret peak must not be charged');
+});
+
 test('solveVoicingSearch: identity recovery when source and target tunings agree', () => {
     const spec = chordSpecFromNotes(E_STD, v([[1, 3], [2, 2], [3, 0], [4, 1], [5, 0]]), 'C');
     const found = solveVoicingSearch(spec, spec.pcs, E_STD, { maxNotes: spec.noteCount });
@@ -309,9 +322,9 @@ test('createRetuner: Wonderwall-style capo-2 F#m7 with mixed open/fretted notes'
     const chord = { t: 12.776, id: 0, notes: v([[0, 0], [1, 4], [2, 4], [3, 0], [4, 5], [5, 5]]) };
     const bundle = guitarBundle({ capo: 2, chords: [chord], templates: [tmpl] });
     retuner.apply(bundle, E_STD);
-    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[0, 2], [1, 0], [2, 4], [3, 2], [4, 2], [5, 0]]));
-    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [2, 0, 4, 2, 2, 0]);
-    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [1, 0, 4, 2, 3, 0]);
+    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[0, 2], [1, 0], [2, 2], [3, 2], [4, 2], [5, 0]]));
+    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [2, 0, 2, 2, 2, 0]);
+    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [1, 0, 2, 3, 4, 0]);
 
     // Every note is a real F#m7 tone (F#=6, A=9, C#=1, E=4) — the bug this
     // guards against produced 3 of 6 notes outside the chord entirely.

@@ -56,6 +56,7 @@ export const SOLVER_WEIGHTS = {
     REGISTER_DISTANCE: 2,   // per semitone |target bass note − source bass note|
     NOTE_COUNT_DIFF: 4,     // per |target note count − source note count|
     INNER_MUTE: 10,         // per muted string strictly between sounded strings
+    INTERIOR_PEAK: 80,      // per fretted note higher than both nearest fretted neighbors (not an edge string)
     DEGRADE_LEVEL: 500,     // per degradation-ladder level
 };
 
@@ -245,6 +246,17 @@ export function degradationLadder(spec) {
     return out;
 }
 
+// Count of interior "peak" frets: >= 2 frets higher than both nearest
+// fretted neighbors. Open D's x-x-0-2-3-2 (a 1-fret peak) stays exempt.
+function interiorPeakCount(voicing) {
+    const fretted = voicing.filter(n => isFretted(n.f)).sort((a, b) => a.s - b.s);
+    let count = 0;
+    for (let i = 1; i < fretted.length - 1; i += 1) {
+        if (fretted[i].f - fretted[i - 1].f >= 2 && fretted[i].f - fretted[i + 1].f >= 2) count += 1;
+    }
+    return count;
+}
+
 // Full voicing cost (per-note EXACT_PITCH_MISS must match the search's partial-cost bound).
 // registerFlexible drops EXACT_PITCH_MISS/REGISTER_DISTANCE for an open chord's shape elsewhere.
 export function scoreVoicing(spec, voicing, registerFlexible = false) {
@@ -279,6 +291,7 @@ export function scoreVoicing(spec, voicing, registerFlexible = false) {
     if (!registerFlexible) cost += W.REGISTER_DISTANCE * Math.abs(minMidi - spec.bassMidi);
     cost += W.NOTE_COUNT_DIFF * Math.abs(voicing.length - spec.noteCount);
     cost += W.INNER_MUTE * (maxS - minS + 1 - voicing.length);
+    cost += W.INTERIOR_PEAK * interiorPeakCount(voicing);
     return cost;
 }
 
