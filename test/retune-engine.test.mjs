@@ -341,21 +341,21 @@ test('anchor widening: modest widen, clean split, or single wide band', () => {
             { t: 1, f: 3, origNote: { t: 1, f: 0 } },  // newly fretted, 1 fret below
             { t: 2, f: 6, origNote: { t: 2, f: 6 } },  // fretted donor, adjustment 0
         ]),
-        [{ time: 1, fret: 3, width: 5 }]);
+        [{ time: 1, fret: 3, width: 4 }]);
     assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 2, width: 4 }], [
             { t: 1, f: 2, origNote: { t: 1, f: 2 } },  // fretted donor: base band [2,6]
             { t: 2, f: 7, origNote: { t: 2, f: 0 } },  // newly fretted, 1 fret above
         ]),
-        [{ time: 1, fret: 2, width: 5 }]);
+        [{ time: 1, fret: 2, width: 6 }]);
 
     // Tier 2: a note past the cap or the time window seeds a clean split
     // instead of being left uncovered (both directions), as long as it's
     // strictly later than the current band's own start.
-    assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 4, width: 4 }], [
-            { t: 1, f: 4, origNote: { t: 1, f: 4 } },  // fretted donor, adjustment 0
-            { t: 2, f: 1, origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
+    assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 8, width: 4 }], [
+            { t: 1, f: 8, origNote: { t: 1, f: 8 } },  // fretted donor, adjustment 0
+            { t: 2, f: 2, origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
         ]),
-        [{ time: 1, fret: 4, width: 4 }, { time: 2, fret: 1, width: 4 }]);
+        [{ time: 1, fret: 8, width: 4 }, { time: 2, fret: 2, width: 4 }]);
     assert.deepStrictEqual(remapAnchors([{ time: 1, fret: 2, width: 4 }], [
             { t: 1, f: 2, origNote: { t: 1, f: 2 } },
             { t: 2, f: 9, origNote: { t: 2, f: 0 } },  // newly fretted, past the cap
@@ -380,7 +380,7 @@ test('anchor widening: modest widen, clean split, or single wide band', () => {
     ];
     const [risingWidened, risingNext] = remapAnchors(risingAnchors, risingNotes);
     assert.deepStrictEqual(risingWidened, { time: 1, fret: 2, width: 4 });
-    assert.deepStrictEqual(risingNext, { time: 5, fret: 2, width: 5 });
+    assert.deepStrictEqual(risingNext, { time: 5, fret: 2, width: 6 });
 
     // Tier 3a: a long passage — one open-in-source run (now fretted) tied
     // to the anchor's own start, plus a normally fretted run later. The
@@ -411,7 +411,7 @@ test('anchor widening: modest widen, clean split, or single wide band', () => {
         rapidNotes.push({ t: i * 0.4 + 0.2, f: 1, origNote: { t: i * 0.4 + 0.2, f: 0 } });
     }
     assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 8, width: 4 }], rapidNotes),
-        [{ time: 0, fret: 1, width: 7 }]);
+        [{ time: 0, fret: 1, width: 8 }]);
 });
 
 // End-to-end through createRetuner: Drop C (non-uniform per-string
@@ -434,9 +434,9 @@ test('createRetuner anchor split end-to-end (Drop C onto BEADG)', () => {
     });
     createRetuner().apply(bundle, beadgTarget, beadg.maxFret, 0);
     assert.deepStrictEqual(bundle.anchors, [
-            { time: 12, fret: 6, width: 3 },
-            { time: 15.75, fret: 1, width: 3 },
-            { time: 16, fret: 6, width: 3 },
+            { time: 12, fret: 6, width: 4 },
+            { time: 15.75, fret: 1, width: 4 },
+            { time: 16, fret: 6, width: 4 },
         ]);
 });
 
@@ -680,7 +680,7 @@ test('createRetuner end-to-end retune-attributable gate', () => {
         });
         createRetuner().apply(bundle, DEFAULT_TARGET_MIDI_TUNING, 20, 0);
         assert.deepStrictEqual(bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 2, f: 6 }, { s: 1, f: 0 }]);
-        assert.deepStrictEqual(bundle.anchors, [{ time: 0.0, fret: 6, width: 3 }]);
+        assert.deepStrictEqual(bundle.anchors, [{ time: 0.0, fret: 6, width: 4 }]);
     }
 
     // A genuine differential per-string retune (only one string shifted
@@ -1039,7 +1039,13 @@ test('displayFretOffset: physical-fret display shift', () => {
     assert.deepStrictEqual(bundle.notes.map(n => n.f), [5, 0, 7]);
     assert.deepStrictEqual(bundle.notes.some(n => n.origNote.f === 2), false);
     assert.deepStrictEqual(bundle.notes[2].sl, 9);
-    assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 5, width: 3 }]);
+    // The slide at t=3 is past ANCHOR_DONOR_WINDOW_S from the anchor's
+    // own start, so it splits into its own anchor rather than being
+    // absorbed into one wide band.
+    assert.deepStrictEqual(bundle.anchors, [
+        { time: 0, fret: 5, width: 4 },
+        { time: 3, fret: 7, width: 4 },
+    ]);
     assert.notStrictEqual(bundle.anchors[0], rawAnchors[0],
         'shifted anchors must be fresh objects — the raw chart anchor must never be mutated');
     assert.deepStrictEqual(rawAnchors[0], { time: 0, fret: 5, width: 4 });
@@ -1530,7 +1536,7 @@ test('a chart\'s own native capo only raises notes at or below its fret', () => 
     assert.deepStrictEqual(bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 1, f: 2 }, { s: 2, f: 2 }]);
     assert.deepStrictEqual(bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 3, f: 2 }, { s: 4, f: 2 }]);
     // No note needs a finger, so remapAnchors falls back to the nearest note's own change.
-    assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 2, width: 3 }]);
+    assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 2, width: 4 }]);
 });
 
 // Anchor donors include chord notes, not just standalone ones — a
@@ -1813,7 +1819,7 @@ test('createRetuner end-to-end: revoiced bucket notes and anchor donor fallback'
     assert.ok(bucketNotes.length >= 1, 'revoiced bucket has at least one note');
     assert.ok(bucketNotes.every(n => n.crRevoiced === true), 'revoiced bucket notes are tagged');
     assert.deepStrictEqual(nearBundle.notes.find(n => n.t === 0.6).crRevoiced, false);
-    assert.deepStrictEqual(nearBundle.anchors, [{ time: 0, fret: 1, width: 3 }]);
+    assert.deepStrictEqual(nearBundle.anchors, [{ time: 0, fret: 1, width: 4 }]);
 
     // Same chart with the exact note pushed past the window: the anchor
     // falls back to the first revoiced donor's own adjustment, and the
@@ -1827,8 +1833,8 @@ test('createRetuner end-to-end: revoiced bucket notes and anchor donor fallback'
     const expected = Math.max(0, Math.min(20, 1 + donor.f - donor.origNote.f));
     const farNote = farBundle.notes.find(n => n.t === 30);
     assert.deepStrictEqual(farBundle.anchors, [
-        { time: 0, fret: expected, width: 3 },
-        { time: 30, fret: farNote.f, width: 3 },
+        { time: 0, fret: expected, width: 4 },
+        { time: 30, fret: farNote.f, width: 4 },
     ]);
     assert.notStrictEqual(expected, 1, 'fallback case actually differs from the exact adjustment');
 });

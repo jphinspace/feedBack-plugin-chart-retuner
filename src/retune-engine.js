@@ -10,7 +10,7 @@
 // solver) blocks in createRetuner below.
 
 import { DEFAULT_MAX_FRET, DEFAULT_TARGET_MIDI_TUNING, computeOpenStringMidiByString, computeArrangementShift } from './target-tuning.js';
-import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES, isFretted, isOpen, isRealFret, MAX_CHORD_SPAN } from './chord-solver.js';
+import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES, isFretted, isOpen, isRealFret } from './chord-solver.js';
 
 const clampFret = (f, maxFret) => Math.max(0, Math.min(maxFret, f));
 
@@ -184,6 +184,10 @@ const ANCHOR_MAX_SPLITS = 8;
 // real position change rather than one note passing through.
 const ANCHOR_SUSTAIN_MIN_MOMENTS = 2;
 
+// An anchor's displayed width is a fret COUNT, not a fret-to-fret span
+// (fret=4,width=4 shows frets 4-7) — never below a 4-finger reach.
+const ANCHOR_MIN_WIDTH = 4;
+
 // Remaps hand-position anchors ({ time, fret, width }, no string of
 // their own) by borrowing the adjustment of the nearest already-remapped
 // note at/after the anchor's time. A donor must actually need a finger:
@@ -255,7 +259,7 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET,
         const adjustment = note.f - note.origNote.f;
         const baseFret = Math.max(0, Math.min(maxFret, a.fret + adjustment));
         let fret = baseFret;
-        let width = a.width;
+        let width = 0;
         let startTime = a.time;
         const mPtrStart = mPtr;
         const segments = [];
@@ -266,6 +270,9 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET,
         for (;;) {
             const widthCap = Math.max(width, HAND_JUMP_FRET_THRESHOLD);
             const spanEnd = Math.min(hardEnd, startTime + ANCHOR_DONOR_WINDOW_S);
+            // The sustain veto only applies once a real moment has
+            // confirmed the band — not to a fresh, still-unconfirmed estimate.
+            let established = false;
             while (mPtr < moments.length && moments[mPtr].t < startTime) mPtr += 1;
             while (mPtr < moments.length && moments[mPtr].t < hardEnd) {
                 const m = moments[mPtr];
@@ -273,16 +280,17 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET,
                 // window (which only gates genuine widen/split decisions
                 // below), so an already-covered moment can't force a
                 // pointless split.
-                if (m.lo >= fret && m.hi <= fret + width) { mPtr += 1; continue; }
+                if (m.lo >= fret && m.hi <= fret + width) { mPtr += 1; established = true; continue; }
                 if (!(m.t < spanEnd)) break;
                 const newLo = Math.min(fret, m.lo);
                 const newHi = Math.max(fret + width, m.hi);
                 if (newHi - newLo > widthCap) break;
-                if (isSustainedDeparture(mPtr, fret, width, hardEnd, spanEnd)) break;
+                if (established && isSustainedDeparture(mPtr, fret, width, hardEnd, spanEnd)) break;
                 fret = newLo; width = newHi - newLo;
                 mPtr += 1;
+                established = true;
             }
-            segments.push({ time: startTime, fret, width });
+            segments.push({ time: startTime, fret, width: Math.max(width + 1, ANCHOR_MIN_WIDTH) });
             if (segments.length > ANCHOR_MAX_SPLITS) break;
             const orphan = mPtr < moments.length ? moments[mPtr] : null;
             if (!orphan || !(orphan.t < hardEnd)) break;
@@ -294,7 +302,7 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET,
             startTime = orphan.t;
             fret = Math.max(0, Math.min(maxFret, orphan.lo));
             const hi = Math.max(0, Math.min(maxFret, orphan.hi));
-            width = Math.max(hi - fret, a.width);
+            width = hi - fret;
         }
 
         if (segments.length <= ANCHOR_MAX_SPLITS && !tiedOrphan) {
@@ -320,9 +328,9 @@ export function remapAnchors(anchors, remappedNotes, maxFret = DEFAULT_MAX_FRET,
             if (fbMin === null) { fbMin = baseFret; fbMax = baseFret; }
             // An anchor is a hand-position indicator (one finger per
             // fret), not a note tracker, so the band never shrinks
-            // below the chart's own authored width even when every
-            // real note in a long span lands on one fret.
-            out.push({ time: a.time, fret: fbMin, width: Math.max(fbMax - fbMin, a.width) });
+            // below ANCHOR_MIN_WIDTH even when every real note in a
+            // long span lands on one fret.
+            out.push({ time: a.time, fret: fbMin, width: Math.max(fbMax - fbMin + 1, ANCHOR_MIN_WIDTH) });
             mPtr = p;
         }
     }
@@ -831,12 +839,7 @@ export function createRetuner(opts) {
         const anchorDonors = newChords.length
             ? newNotes.concat(newChords.flatMap(c => c.notes)).sort((a, b) => a.t - b.t)
             : newNotes;
-        // Chart-authored anchor width is a flat placeholder wider than a
-        // real 4-finger reach — cap it to MAX_CHORD_SPAN.
-        const cappedAnchors = Array.isArray(rawAnchors)
-            ? rawAnchors.map(a => (a.width > MAX_CHORD_SPAN ? { ...a, width: MAX_CHORD_SPAN } : a))
-            : rawAnchors;
-        remappedAnchors = remapAnchors(cappedAnchors, anchorDonors, maxFret, capo);
+        remappedAnchors = remapAnchors(rawAnchors, anchorDonors, maxFret, capo);
         remappedTemplates = newTemplates;
 
         // Physical-fret display shift: every fretted note becomes r + capo,
