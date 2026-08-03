@@ -134,29 +134,25 @@ test('solveVoicingSearch: identity recovery when source and target tunings agree
     assert.deepStrictEqual(shape(found.voicing), v([[1, 3], [2, 2], [3, 0], [4, 1], [5, 0]]));
 });
 
-// Eb-standard open-E-shape (022100, sounds Eb major) onto an E-standard
-// guitar. No exact-open mapping exists (root Eb2 is below the
-// instrument); the solver revoices near the open position instead of
-// jumping to a distant barre: x-1-1-0-4-x = Bb2 Eb3 G3 Eb4.
+// Eb-standard open-E-shape onto E-standard: registerFlexible lands Eb3
+// (not the unreachable Eb2) in the bass: x-x-1-3-4-3 = Eb3 Bb3 Eb4 G4.
 test('solveChord: Eb-standard open-E-shape onto E-standard', () => {
     const notes = v([[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]);
     const spec = chordSpecFromNotes(EB_STD, notes, 'Eb');
     const r = solveChord(spec, E_STD, null);
     assert.deepStrictEqual({ revoiced: r.revoiced, degradeLevel: r.degradeLevel }, { revoiced: true, degradeLevel: 0 });
     assert.deepStrictEqual(r.placements.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s),
-        v([[1, 1], [2, 1], [3, 0], [4, 4]]));
-    assert.deepStrictEqual(r.placements.map(p => p.srcIndex).sort((a, b) => a - b), [1, 2, 3, 5]);
+        v([[2, 1], [3, 3], [4, 4], [5, 3]]));
+    assert.deepStrictEqual(r.placements.map(p => p.srcIndex).sort((a, b) => a - b), [2, 3, 4, 5]);
 });
 
-// Drop-D D5 (000xxx) onto E standard: the below-range D2 drops, the two
-// playable original pitches (A2, D3) survive as opens — same notes
-// today's per-note engine keeps, found via the search.
+// Drop-D D5 onto E standard: below-range D2 drops; registerFlexible keeps the open D string as root/bass.
 test('solveChord: Drop-D D5 onto E standard', () => {
     const spec = chordSpecFromNotes(DROP_D, v([[0, 0], [1, 0], [2, 0]]), 'D5');
     const r = solveChord(spec, E_STD, null);
     assert.deepStrictEqual(r.revoiced, true);
     assert.deepStrictEqual(r.placements.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s),
-        v([[1, 0], [2, 0]]));
+        v([[2, 0], [3, 2], [4, 3]]));
 });
 
 // Exact candidate: F barre (133211) in E standard onto Drop D. The
@@ -286,9 +282,7 @@ test('createRetuner: E-standard open E onto Drop-D target', () => {
     assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [2, 3, 4, 1, 0, 0]);
 });
 
-// Capo-2 D major, span-2/3-finger on the source; the exact reproduction
-// on E-standard would need span-3, so the solver revoices to a
-// comparable span-1/2-finger D major instead.
+// Capo-2 D major (source span-1); exact reproduction needs span-3, so it revoices to span-1.
 test('createRetuner: capo-2 chart with open strings onto E-standard', () => {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'D', frets: [-1, 5, 4, 0, 3, 0], fingers: [-1, 3, 2, 0, 1, 0] };
@@ -308,20 +302,16 @@ test('createRetuner: capo-2 chart with open strings onto E-standard', () => {
     }
 });
 
-// Regression (real chart data, Oasis "Wonderwall"): capo-2 F#m7 mixing
-// open and fretted notes must produce a valid F#m7 on E-standard, not a
-// mix of chart-capo-doubled and un-doubled pitches. Source is
-// span-1/2-finger; solver revoices to span-2/3-finger, not the span-3,
-// full-barre exact reproduction.
+// Regression (Oasis "Wonderwall"): capo-2 F#m7 mixing open/fretted notes must stay valid F#m7.
 test('createRetuner: Wonderwall-style capo-2 F#m7 with mixed open/fretted notes', () => {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'F#m7', frets: [0, 4, 4, 0, 5, 5], fingers: [-1, 1, 2, -1, 3, 4] };
     const chord = { t: 12.776, id: 0, notes: v([[0, 0], [1, 4], [2, 4], [3, 0], [4, 5], [5, 5]]) };
     const bundle = guitarBundle({ capo: 2, chords: [chord], templates: [tmpl] });
     retuner.apply(bundle, E_STD);
-    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[0, 2], [1, 4], [2, 4], [3, 2], [5, 0]]));
-    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [2, 4, 4, 2, -1, 0]);
-    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [1, 3, 4, 2, -1, 0]);
+    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[0, 2], [1, 0], [2, 4], [3, 2], [4, 2], [5, 0]]));
+    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [2, 0, 4, 2, 2, 0]);
+    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [1, 0, 4, 2, 3, 0]);
 
     // Every note is a real F#m7 tone (F#=6, A=9, C#=1, E=4) — the bug this
     // guards against produced 3 of 6 notes outside the chord entirely.
@@ -332,9 +322,8 @@ test('createRetuner: Wonderwall-style capo-2 F#m7 with mixed open/fretted notes'
     }
 });
 
-// Eb-standard chart on an E-standard target: the open-E-shape Eb chord
-// revoices near the open position (x-1-1-0-4-x), and the rebuilt template
-// agrees with the chord instance by construction.
+// Eb-standard chart on E-standard: root stays in bass (x-x-1-3-4-3). The
+// 2-note subset (both fretted, no open note) doesn't get registerFlexible.
 test('createRetuner: Eb-standard chart on E-standard target', () => {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'Eb', frets: [0, 2, 2, 1, 0, 0], fingers: [0, 2, 3, 1, 0, 0] };
@@ -344,23 +333,23 @@ test('createRetuner: Eb-standard chart on E-standard target', () => {
     const subset = { t: 2, id: 0, notes: v([[1, 2], [2, 2]]) };
     const bundle = guitarBundle({ tuning: [-1, -1, -1, -1, -1, -1], chords: [full, subset], templates: [tmpl] });
     retuner.apply(bundle, E_STD);
-    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[1, 1], [2, 1], [3, 0], [4, 4]]));
-    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [-1, 1, 1, 0, 4, -1]);
+    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[2, 1], [3, 3], [4, 4], [5, 3]]));
+    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [-1, -1, 1, 3, 4, 3]);
     assert.deepStrictEqual(sf(bundle.chords[1].notes), v([[1, 1], [2, 1]]));
     assert.ok(bundle.chords[1].notes.every(n => subset.notes.includes(n.origNote)),
         'Eb->E apply: subset notes reference their own raw notes');
 });
 
 // Drop-D chart's flat-note D5 bucket (three same-onset notes) on an
-// E-standard target: the below-range D2 drops, A2/D3 survive as opens —
-// and origNote references point into the raw arrays.
+// E-standard target: the below-range D2 drops, but the open D string
+// keeps the root in the bass instead of fretting the A string up to it.
 test('createRetuner: Drop-D flat-note D5 bucket onto E-standard', () => {
     const retuner = CR.createRetuner();
     const rawNotes = [{ t: 0, s: 0, f: 0 }, { t: 0, s: 1, f: 0 }, { t: 0, s: 2, f: 0 }, { t: 1, s: 2, f: 5 }];
     const bundle = guitarBundle({ tuning: [-2, 0, 0, 0, 0, 0], notes: rawNotes });
     retuner.apply(bundle, E_STD);
     const atZero = bundle.notes.filter(n => n.t === 0);
-    assert.deepStrictEqual(sf(atZero), v([[1, 0], [2, 0]]));
+    assert.deepStrictEqual(sf(atZero), v([[2, 0], [3, 2], [4, 3]]));
     assert.deepStrictEqual(sf(bundle.notes.filter(n => n.t === 1)), v([[2, 5]]));
     assert.ok(bundle.notes.every(n => rawNotes.includes(n.origNote)),
         'DropD D5 bucket: origNote references the raw source notes');

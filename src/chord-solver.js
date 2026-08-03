@@ -49,8 +49,8 @@ export const SOLVER_WEIGHTS = {
     EXACT_PITCH_MISS: 40,   // per target note not among the source's sounded pitches
     DROPPED_NOTE: 30,       // per source note whose pitch class vanished entirely
     DROPPED_DOUBLING: 8,    // per source note dropped while its pitch class stays covered
-    ROOT_NOT_IN_BASS: 25,   // lowest sounded target note isn't the root (or slash bass)
-    OPENNESS_MISMATCH: 12,  // per |source open-string count − target open-string count|
+    ROOT_NOT_IN_BASS: 100,  // lowest sounded target note isn't the root (or slash bass)
+    OPENNESS_MISMATCH: 12,  // per open string the target loses vs. the source (gaining extra opens is free)
     BARRE_INTRODUCED: 30,   // target needs a barre (>4 fretted) where the source didn't
     POSITION_DISTANCE: 5,   // per fret |target min fretted fret − source min fretted fret|
     REGISTER_DISTANCE: 2,   // per semitone |target bass note − source bass note|
@@ -141,49 +141,31 @@ export function barreIsValid(voicing) {
     return !voicing.some(n => isOpen(n.f) && n.s >= barreLowS);
 }
 
-// Hard playability check against the source chord's own difficulty:
-// fretted stretch within max(MAX_CHORD_SPAN, source stretch), fingers
-// within max(MAX_FRETTING_FINGERS, source fingers). Anything the source
-// chord itself demanded stays allowed (it was in the chart).
+// Shared span/finger check; allowCeiling grants slack up to the generic
+// MAX_CHORD_SPAN/MAX_FRETTING_FINGERS ceiling on top of the source's own difficulty.
+function withinDifficulty(voicing, spec, allowCeiling) {
+    const spanLimit = allowCeiling ? Math.max(MAX_CHORD_SPAN, spec.span) : spec.span;
+    const fingerLimit = allowCeiling ? Math.max(MAX_FRETTING_FINGERS, spec.fingers) : spec.fingers;
+    const fretted = voicing.filter(n => isFretted(n.f));
+    if (fretted.length > 1) {
+        const { min: minF, max: maxF } = fretRange(fretted);
+        if (maxF - minF > spanLimit) return false;
+    }
+    return fingersNeeded(voicing) <= fingerLimit;
+}
+
+// Playable against the source's own difficulty, with generic ceiling slack.
 export function voicingPlayable(voicing, spec) {
-    const fretted = voicing.filter(n => isFretted(n.f));
-    if (fretted.length > 1) {
-        const { min: minF, max: maxF } = fretRange(fretted);
-        if (maxF - minF > Math.max(MAX_CHORD_SPAN, spec.span)) return false;
-    }
-    return fingersNeeded(voicing) <= Math.max(MAX_FRETTING_FINGERS, spec.fingers);
+    return withinDifficulty(voicing, spec, true);
 }
 
-// Strict, source-relative playability — no slack up to the generic
-// beginner-chord ceiling the way voicingPlayable grants. Used only to
-// gate the exact-pitch candidate below: a source chord's ease often
-// comes from a capo doing a finger's job for free (an open string, or a
-// raw fret at/below the capo, needs no finger at all), and that
-// assistance doesn't exist on an uncapo'd target — reproducing the exact
-// pitch can legitimately demand more fingers or a wider stretch than the
-// source ever did. When it does, a revoiced voicing genuinely no harder
-// than the source (the degradation ladder below) is the better outcome,
-// even though the exact pitch would still clear the generic ceiling.
+// No harder than the source at all; gates the exact-pitch candidate.
 function notHarderThanSource(voicing, spec) {
-    const fretted = voicing.filter(n => isFretted(n.f));
-    if (fretted.length > 1) {
-        const { min: minF, max: maxF } = fretRange(fretted);
-        if (maxF - minF > spec.span) return false;
-    }
-    return fingersNeeded(voicing) <= spec.fingers;
+    return withinDifficulty(voicing, spec, false);
 }
 
-// Builds the solver's view of one source chord from its notes
-// ([{ s, f, ... }], source-string indexed) under the source tuning
-// (sourceOpenMidiByString excludes chart capo; `capo` raises only the
-// PITCH of notes at or below it — see the Math.max below). `.f` on each
-// spec note stays the chart's own raw fret, not the capo-raised one: it
-// drives span/finger-count difficulty (fretRange, fingersNeeded,
-// barreIsValid), and the raw fret is what the player's hand actually
-// does — a capo'd open string needs no finger at all, so it must not
-// read as a real fretted note there. templateName seeds the root when
-// it parses and agrees with the sounded pitch classes; otherwise the
-// lowest sounded pitch is the root. Returns null when no note sounds.
+// Builds the solver's view of one source chord from its notes. `.f` stays
+// the raw fret; difficulty math treats a note at/below the capo as open.
 export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName, capo = 0) {
     const specNotes = [];
     for (let i = 0; i < notes.length; i += 1) {
@@ -200,7 +182,10 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName, 
     for (const n of specNotes) pcCounts.set(n.pc, (pcCounts.get(n.pc) || 0) + 1);
     let bassMidi = Infinity;
     for (const n of specNotes) if (n.midi < bassMidi) bassMidi = n.midi;
-    const fretted = specNotes.filter(n => isFretted(n.f));
+    // A capo already holds down anything at or below its own fret, so
+    // difficulty math (span/fingers/openCount) treats those as open too.
+    const fingerNotes = specNotes.map(n => (n.f > capo ? n : { ...n, f: 0 }));
+    const fretted = fingerNotes.filter(n => isFretted(n.f));
     let minFretted = null;
     let span = 0;
     if (fretted.length > 0) {
@@ -227,7 +212,7 @@ export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName, 
         span,
         openCount: specNotes.length - fretted.length,
         noteCount: specNotes.length,
-        fingers: fingersNeeded(specNotes),
+        fingers: fingersNeeded(fingerNotes),
         requiresBarre: fretted.length > MAX_FRETTING_FINGERS,
     };
 }
@@ -260,11 +245,9 @@ export function degradationLadder(spec) {
     return out;
 }
 
-// Full cost of a candidate voicing ([{ s, f, midi, pc }]) against the
-// spec. Every term is >= 0 and the per-note EXACT_PITCH_MISS portion is
-// exactly what the search accumulates as its branch-and-bound partial
-// cost, keeping that bound admissible.
-export function scoreVoicing(spec, voicing) {
+// Full voicing cost (per-note EXACT_PITCH_MISS must match the search's partial-cost bound).
+// registerFlexible drops EXACT_PITCH_MISS/REGISTER_DISTANCE for an open chord's shape elsewhere.
+export function scoreVoicing(spec, voicing, registerFlexible = false) {
     const W = SOLVER_WEIGHTS;
     let cost = 0;
     let minMidi = Infinity;
@@ -275,7 +258,7 @@ export function scoreVoicing(spec, voicing) {
     let maxS = -Infinity;
     const tgtPcCounts = new Map();
     for (const n of voicing) {
-        if (!spec.pitchSet.has(n.midi)) cost += W.EXACT_PITCH_MISS;
+        if (!registerFlexible && !spec.pitchSet.has(n.midi)) cost += W.EXACT_PITCH_MISS;
         if (n.midi < minMidi) { minMidi = n.midi; minMidiPc = n.pc; }
         if (isOpen(n.f)) openCount += 1;
         else if (minFretted === null || n.f < minFretted) minFretted = n.f;
@@ -293,7 +276,7 @@ export function scoreVoicing(spec, voicing) {
     cost += W.OPENNESS_MISMATCH * Math.max(0, spec.openCount - openCount);
     if (voicing.length - openCount > MAX_FRETTING_FINGERS && !spec.requiresBarre) cost += W.BARRE_INTRODUCED;
     cost += W.POSITION_DISTANCE * Math.abs((minFretted !== null ? minFretted : 0) - (spec.minFretted !== null ? spec.minFretted : 0));
-    cost += W.REGISTER_DISTANCE * Math.abs(minMidi - spec.bassMidi);
+    if (!registerFlexible) cost += W.REGISTER_DISTANCE * Math.abs(minMidi - spec.bassMidi);
     cost += W.NOTE_COUNT_DIFF * Math.abs(voicing.length - spec.noteCount);
     cost += W.INNER_MUTE * (maxS - minS + 1 - voicing.length);
     return cost;
@@ -316,6 +299,7 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
     if (!Array.isArray(target) || target.length === 0) return null;
     const nStr = target.length;
     const budget = (opts && opts.budget) || { nodes: MAX_SEARCH_NODES, aborted: false };
+    const registerFlexible = !!(opts && opts.registerFlexible);
     const maxNotes = Math.min((opts && opts.maxNotes) || spec.noteCount, nStr);
     if (maxNotes < requiredPcs.size) return null;
     // Clamped so the position loop below always has at least p=1 (a
@@ -361,7 +345,7 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
             if (j === nStr) {
                 if (mask !== fullMask || chosen.length === 0) return;
                 if (fingersNeeded(chosen) > Math.max(MAX_FRETTING_FINGERS, spec.fingers)) return;
-                const cost = scoreVoicing(spec, chosen);
+                const cost = scoreVoicing(spec, chosen, registerFlexible);
                 if (!best || cost < best.cost) best = { voicing: chosen.slice(), cost };
                 return;
             }
@@ -377,7 +361,7 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
                 if (c === null) { dfs(j + 1, mask, partial); continue; }
                 if (chosen.length >= maxNotes) continue;
                 chosen.push(c);
-                dfs(j + 1, mask | c.bit, partial + (spec.pitchSet.has(c.midi) ? 0 : W.EXACT_PITCH_MISS));
+                dfs(j + 1, mask | c.bit, partial + (registerFlexible || spec.pitchSet.has(c.midi) ? 0 : W.EXACT_PITCH_MISS));
                 chosen.pop();
             }
         })(0, 0, 0);
@@ -421,7 +405,7 @@ export function matchVoicingToSource(voicing, spec) {
 
 // Cheapest all-open (no fretted notes) target voicing covering every pc
 // in requiredPcs, or null if no combination of open strings covers them all.
-function allOpenCandidate(spec, requiredPcs, targetMidiTuning) {
+function allOpenCandidate(spec, requiredPcs, targetMidiTuning, registerFlexible) {
     const target = targetMidiTuning;
     if (!Array.isArray(target) || target.length === 0) return null;
     const openNotes = [];
@@ -439,10 +423,12 @@ function allOpenCandidate(spec, requiredPcs, targetMidiTuning) {
         for (let i = 0; i < n; i += 1) {
             if (mask & (1 << i)) { voicing.push(openNotes[i]); covered.add(openNotes[i].pc); }
         }
+        // matchVoicingToSource requires |voicing| <= |spec.notes|.
+        if (voicing.length > spec.notes.length) continue;
         let coversAll = true;
         for (const pc of requiredPcs) { if (!covered.has(pc)) { coversAll = false; break; } }
         if (!coversAll) continue;
-        const cost = scoreVoicing(spec, voicing);
+        const cost = scoreVoicing(spec, voicing, registerFlexible);
         if (!best || cost < best.cost) best = { voicing, cost };
     }
     return best;
@@ -472,22 +458,23 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
             return { placements: exactCandidate, revoiced: false, degradeLevel: 0 };
         }
     }
-    // An open-voiced source tries an all-open target first — the search
-    // below anchors near the source's own frets and won't jump strings.
-    if (spec.openCount > 0) {
-        const allOpen = allOpenCandidate(spec, spec.pcs, targetMidiTuning);
-        if (allOpen) {
-            const placements = matchVoicingToSource(allOpen.voicing, spec);
-            if (placements) return { placements, revoiced: true, degradeLevel: 0 };
-        }
-    }
     const W = SOLVER_WEIGHTS;
     const budget = (opts && opts.budget) || { nodes: MAX_SEARCH_NODES, aborted: false };
-    const levels = degradationLadder(spec);
+    // An open source's shape elsewhere often lands a different octave; don't charge for that.
+    const registerFlexible = spec.openCount > 0;
     let best = null;
+    // Seed an all-open baseline for an open-voiced source; still has to win on cost below.
+    if (spec.openCount > 0) {
+        const allOpen = allOpenCandidate(spec, spec.pcs, targetMidiTuning, registerFlexible);
+        if (allOpen) {
+            const placements = matchVoicingToSource(allOpen.voicing, spec);
+            if (placements) best = { total: allOpen.cost, placements, revoiced: true, degradeLevel: 0 };
+        }
+    }
+    const levels = degradationLadder(spec);
     for (let level = 0; level < levels.length; level += 1) {
         if (budget.nodes <= 0) { budget.aborted = true; break; }
-        const found = solveVoicingSearch(spec, levels[level], targetMidiTuning, { maxNotes: spec.noteCount, budget }, maxFret);
+        const found = solveVoicingSearch(spec, levels[level], targetMidiTuning, { maxNotes: spec.noteCount, budget, registerFlexible }, maxFret);
         if (found) {
             const total = found.cost + level * W.DEGRADE_LEVEL;
             if (!best || total < best.total) {
