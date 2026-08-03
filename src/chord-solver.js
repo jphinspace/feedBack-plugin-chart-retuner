@@ -154,25 +154,44 @@ export function voicingPlayable(voicing, spec) {
     return fingersNeeded(voicing) <= Math.max(MAX_FRETTING_FINGERS, spec.fingers);
 }
 
+// Strict, source-relative playability — no slack up to the generic
+// beginner-chord ceiling the way voicingPlayable grants. Used only to
+// gate the exact-pitch candidate below: a source chord's ease often
+// comes from a capo doing a finger's job for free (an open string, or a
+// raw fret at/below the capo, needs no finger at all), and that
+// assistance doesn't exist on an uncapo'd target — reproducing the exact
+// pitch can legitimately demand more fingers or a wider stretch than the
+// source ever did. When it does, a revoiced voicing genuinely no harder
+// than the source (the degradation ladder below) is the better outcome,
+// even though the exact pitch would still clear the generic ceiling.
+function notHarderThanSource(voicing, spec) {
+    const fretted = voicing.filter(n => isFretted(n.f));
+    if (fretted.length > 1) {
+        const { min: minF, max: maxF } = fretRange(fretted);
+        if (maxF - minF > spec.span) return false;
+    }
+    return fingersNeeded(voicing) <= spec.fingers;
+}
+
 // Builds the solver's view of one source chord from its notes
 // ([{ s, f, ... }], source-string indexed) under the source tuning
 // (sourceOpenMidiByString excludes chart capo; `capo` raises only the
-// notes at or below it — see the Math.max below). templateName seeds
-// the root when it parses and agrees with the sounded pitch classes;
-// otherwise the lowest sounded pitch is the root. Returns null when no
-// note sounds.
+// PITCH of notes at or below it — see the Math.max below). `.f` on each
+// spec note stays the chart's own raw fret, not the capo-raised one: it
+// drives span/finger-count difficulty (fretRange, fingersNeeded,
+// barreIsValid), and the raw fret is what the player's hand actually
+// does — a capo'd open string needs no finger at all, so it must not
+// read as a real fretted note there. templateName seeds the root when
+// it parses and agrees with the sounded pitch classes; otherwise the
+// lowest sounded pitch is the root. Returns null when no note sounds.
 export function chordSpecFromNotes(sourceOpenMidiByString, notes, templateName, capo = 0) {
     const specNotes = [];
     for (let i = 0; i < notes.length; i += 1) {
         const n = notes[i];
         const open = sourceOpenMidiByString[n.s];
         if (open === null || open === undefined) continue;
-        // Chart capo raises an open string's sounding pitch; an already-
-        // fretted note's raw fret is already an absolute position, so it
-        // must not also pick up the capo.
-        const f = Math.max(n.f, capo);
-        const midi = open + f;
-        specNotes.push({ idx: i, s: n.s, f, midi, pc: pitchClassOf(midi) });
+        const midi = open + Math.max(n.f, capo);
+        specNotes.push({ idx: i, s: n.s, f: n.f, midi, pc: pitchClassOf(midi) });
     }
     if (specNotes.length === 0) return null;
     const pitchSet = new Set(specNotes.map(n => n.midi));
@@ -270,7 +289,8 @@ export function scoreVoicing(spec, voicing) {
         else if (t !== srcCount) cost += W.DROPPED_DOUBLING * Math.abs(t - srcCount);
     }
     if (minMidiPc !== (spec.bassPc !== null ? spec.bassPc : spec.rootPc)) cost += W.ROOT_NOT_IN_BASS;
-    cost += W.OPENNESS_MISMATCH * Math.abs(openCount - spec.openCount);
+    // Only penalize losing opens, not gaining extra ones.
+    cost += W.OPENNESS_MISMATCH * Math.max(0, spec.openCount - openCount);
     if (voicing.length - openCount > MAX_FRETTING_FINGERS && !spec.requiresBarre) cost += W.BARRE_INTRODUCED;
     cost += W.POSITION_DISTANCE * Math.abs((minFretted !== null ? minFretted : 0) - (spec.minFretted !== null ? spec.minFretted : 0));
     cost += W.REGISTER_DISTANCE * Math.abs(minMidi - spec.bassMidi);
@@ -399,6 +419,35 @@ export function matchVoicingToSource(voicing, spec) {
     return placements;
 }
 
+// Cheapest all-open (no fretted notes) target voicing covering every pc
+// in requiredPcs, or null if no combination of open strings covers them all.
+function allOpenCandidate(spec, requiredPcs, targetMidiTuning) {
+    const target = targetMidiTuning;
+    if (!Array.isArray(target) || target.length === 0) return null;
+    const openNotes = [];
+    for (let s = 0; s < target.length; s += 1) {
+        const midi = target[s];
+        const pc = pitchClassOf(midi);
+        if (requiredPcs.has(pc)) openNotes.push({ s, f: 0, midi, pc });
+    }
+    const n = openNotes.length;
+    if (n === 0) return null;
+    let best = null;
+    for (let mask = 1; mask < (1 << n); mask += 1) {
+        const voicing = [];
+        const covered = new Set();
+        for (let i = 0; i < n; i += 1) {
+            if (mask & (1 << i)) { voicing.push(openNotes[i]); covered.add(openNotes[i].pc); }
+        }
+        let coversAll = true;
+        for (const pc of requiredPcs) { if (!covered.has(pc)) { coversAll = false; break; } }
+        if (!coversAll) continue;
+        const cost = scoreVoicing(spec, voicing);
+        if (!best || cost < best.cost) best = { voicing, cost };
+    }
+    return best;
+}
+
 // Dispatch for one chord. `exactCandidate` ([{ srcIndex, s, f }] or
 // null) is accepted when it covers every spec note and is playable, or
 // is the source voicing verbatim. Otherwise runs the degradation ladder,
@@ -419,8 +468,17 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
             return src && src.s === pl.s && src.f === pl.f;
         });
         const voicing = exactCandidate.map(pl => ({ s: pl.s, f: pl.f }));
-        if (identity || voicingPlayable(voicing, spec)) {
+        if (identity || notHarderThanSource(voicing, spec)) {
             return { placements: exactCandidate, revoiced: false, degradeLevel: 0 };
+        }
+    }
+    // An open-voiced source tries an all-open target first — the search
+    // below anchors near the source's own frets and won't jump strings.
+    if (spec.openCount > 0) {
+        const allOpen = allOpenCandidate(spec, spec.pcs, targetMidiTuning);
+        if (allOpen) {
+            const placements = matchVoicingToSource(allOpen.voicing, spec);
+            if (placements) return { placements, revoiced: true, degradeLevel: 0 };
         }
     }
     const W = SOLVER_WEIGHTS;

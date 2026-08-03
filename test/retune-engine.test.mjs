@@ -1510,12 +1510,7 @@ test('capo cancellation identity for k = 1..4', (t) => {
     }
 });
 
-// A chart's own native capo (bundle.capo) only raises an open string's
-// sounding pitch, not an already-fretted note's: any note at or below the
-// capo's fret (open, or a raw fret a real capo would physically block,
-// since a capo clamps every string at its own fret) sounds at the capo's
-// own fret; a note already fretted above the capo is already an absolute
-// position and stays exactly where it is.
+// Chart capo only raises notes at or below its own fret; already-fretted notes are untouched.
 test('a chart\'s own native capo only raises notes at or below its fret', () => {
     const { createRetuner } = CR;
     const rawNotes = [
@@ -1534,11 +1529,7 @@ test('a chart\'s own native capo only raises notes at or below its fret', () => 
     createRetuner().apply(bundle, EADGBE.midiTuning, 24);
     assert.deepStrictEqual(bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 2 }, { s: 1, f: 2 }, { s: 2, f: 2 }]);
     assert.deepStrictEqual(bundle.chords[0].notes.map(n => ({ s: n.s, f: n.f })), [{ s: 3, f: 2 }, { s: 4, f: 2 }]);
-    // No note here needs a finger (every string is open or at the capo's
-    // own fret, which the capo itself holds down) — remapAnchors excludes
-    // all of them as donors, falls back to the nearest note's own raw ->
-    // remapped change, and lands the anchor at fret 2, matching where
-    // every note in the passage actually sounds.
+    // No note needs a finger, so remapAnchors falls back to the nearest note's own change.
     assert.deepStrictEqual(bundle.anchors, [{ time: 0, fret: 2, width: 3 }]);
 });
 
@@ -1547,11 +1538,7 @@ test('a chart\'s own native capo only raises notes at or below its fret', () => 
 // createRetuner, the same path screen.js's _transform() uses.
 test('anchor donors include chord notes', () => {
     const { createRetuner } = CR;
-    // No standalone notes at all -- only a chord, matching a pure rhythm-
-    // strum passage. Source tuning detunes the fretted strings +2
-    // semitones so a real shift is actually exercised on retune (chart
-    // capo, by contrast, only raises OPEN strings and wouldn't move
-    // these already-fretted notes at all).
+    // Chord-only passage; tuning detunes +2 so a real shift is exercised (chart capo wouldn't move these).
     const rawChords = [{ id: null, t: 0, notes: [
         { t: 0, s: 1, f: 4 }, { t: 0, s: 2, f: 4 }, { t: 0, s: 3, f: 4 }, { t: 0, s: 4, f: 0 },
     ] }];

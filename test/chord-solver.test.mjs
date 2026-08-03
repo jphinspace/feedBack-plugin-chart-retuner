@@ -286,37 +286,42 @@ test('createRetuner: E-standard open E onto Drop-D target', () => {
     assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [2, 3, 4, 1, 0, 0]);
 });
 
-// Capo chart: chart capo only raises an OPEN string's sounding pitch —
-// a fretted note's raw fret is already an absolute position, so this D
-// major shape (fretted A/D/B strings already at their true frets; open
-// G/e strings rise to the capo's own fret) sounds D major on the source,
-// and on an uncapo'd E-standard target the exact candidate lands the same
-// shape two frets up on the open strings only (x54232).
+// Capo-2 D major, span-2/3-finger on the source; the exact reproduction
+// on E-standard would need span-3, so the solver revoices to a
+// comparable span-1/2-finger D major instead.
 test('createRetuner: capo-2 chart with open strings onto E-standard', () => {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'D', frets: [-1, 5, 4, 0, 3, 0], fingers: [-1, 3, 2, 0, 1, 0] };
     const chord = { t: 0, id: 0, notes: v([[1, 5], [2, 4], [3, 0], [4, 3], [5, 0]]) };
     const bundle = guitarBundle({ capo: 2, chords: [chord], templates: [tmpl] });
     retuner.apply(bundle, E_STD);
-    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[1, 5], [2, 4], [3, 2], [4, 3], [5, 2]]));
-    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [-1, 5, 4, 2, 3, 2]);
-    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [-1, 4, 3, 1, 2, 1]);
+    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[2, 0], [3, 2], [4, 3], [5, 2]]));
+    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [-1, -1, 0, 2, 3, 2]);
+    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [-1, -1, 0, 1, 3, 2]);
+
+    // Still genuine D major (D=2, F#=6, A=9) — revoicing must not change
+    // what the chord actually is, only how comfortably it's played.
+    const D_MAJOR_PCS = new Set([2, 6, 9]);
+    for (const { s, f } of bundle.chords[0].notes) {
+        const pc = (E_STD[s] + f) % 12;
+        assert.ok(D_MAJOR_PCS.has(pc), `string ${s} fret ${f} (pc ${pc}) is not a D major tone`);
+    }
 });
 
-// Regression (real chart data, Oasis "Wonderwall" rhythm arrangement):
-// a capo-2 F#m7 mixing open strings (low E, G) with already-fretted ones
-// (A/D at 4, B/e at 5) must produce a valid F#m7 on an uncapo'd E-standard
-// target — every note must be a real chord tone, not a mix of chart-capo-
-// doubled and un-doubled pitches producing something else entirely.
+// Regression (real chart data, Oasis "Wonderwall"): capo-2 F#m7 mixing
+// open and fretted notes must produce a valid F#m7 on E-standard, not a
+// mix of chart-capo-doubled and un-doubled pitches. Source is
+// span-1/2-finger; solver revoices to span-2/3-finger, not the span-3,
+// full-barre exact reproduction.
 test('createRetuner: Wonderwall-style capo-2 F#m7 with mixed open/fretted notes', () => {
     const retuner = CR.createRetuner();
     const tmpl = { name: 'F#m7', frets: [0, 4, 4, 0, 5, 5], fingers: [-1, 1, 2, -1, 3, 4] };
     const chord = { t: 12.776, id: 0, notes: v([[0, 0], [1, 4], [2, 4], [3, 0], [4, 5], [5, 5]]) };
     const bundle = guitarBundle({ capo: 2, chords: [chord], templates: [tmpl] });
     retuner.apply(bundle, E_STD);
-    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[0, 2], [1, 4], [2, 4], [3, 2], [4, 5], [5, 5]]));
-    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [2, 4, 4, 2, 5, 5]);
-    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [-1, 1, 2, -1, 3, 4]);
+    assert.deepStrictEqual(sf(bundle.chords[0].notes), v([[0, 2], [1, 4], [2, 4], [3, 2], [5, 0]]));
+    assert.deepStrictEqual(bundle.chordTemplates[0].frets, [2, 4, 4, 2, -1, 0]);
+    assert.deepStrictEqual(bundle.chordTemplates[0].fingers, [1, 3, 4, 2, -1, 0]);
 
     // Every note is a real F#m7 tone (F#=6, A=9, C#=1, E=4) — the bug this
     // guards against produced 3 of 6 notes outside the chord entirely.
