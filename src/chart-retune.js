@@ -1,4 +1,4 @@
-// Chart Retuner — barrel module. Aggregates ten pure-logic
+// Chart Retuner — barrel module. Aggregates nine pure-logic
 // modules into the `CR` namespace screen.js and the test suite import.
 //
 //   - pitch.js: note-name <-> MIDI
@@ -15,7 +15,6 @@
 //     stage 4's remapped notes)
 //   - capo-output.js: final target-capo projection (current physical-host
 //     workaround vs. the chart-transform contract)
-//   - string-colors.js: per-string color roles + hex handling
 //
 // Served via feedBack core's /api/plugins/<id>/src/... route
 // (plugin.json "scriptType":"module"); imported by both screen.js and
@@ -30,7 +29,6 @@ import * as ChordSolver from './chord-solver.js';
 import * as RetuneEngine from './retune-engine.js';
 import * as NoteAnchors from './note-anchors.js';
 import * as CapoOutput from './capo-output.js';
-import * as StringColors from './string-colors.js';
 
 export const CR = {
     ...Pitch,
@@ -42,5 +40,4 @@ export const CR = {
     ...RetuneEngine,
     ...NoteAnchors,
     ...CapoOutput,
-    ...StringColors,
 };

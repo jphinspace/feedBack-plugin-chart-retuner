@@ -14,8 +14,8 @@
 // solver) blocks in createRetuner below.
 
 import { DEFAULT_MAX_FRET, HAND_JUMP_FRET_THRESHOLD } from './common.js';
-import { DEFAULT_TARGET_MIDI_TUNING } from './target-tuning.js';
-import { computeOpenStringMidiByString } from './source-tuning.js';
+import { DEFAULT_TARGET_MIDI_TUNING, MAX_FRET_OPTIONS, MAX_TARGET_STRING_COUNT } from './target-tuning.js';
+import { computeOpenStringMidiByString, MAX_SOURCE_STRING_COUNT } from './source-tuning.js';
 import { chordSpecFromNotes, solveChord, computeChordFingers, MAX_SEARCH_NODES, isFretted, isOpen, isRealFret } from './chord-solver.js';
 import { remapAnchors } from './note-anchors.js';
 import { CAPO_OUTPUT_MODE, projectCapoOutput, resolveCapoOutputMode } from './capo-output.js';
@@ -295,6 +295,37 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
     // leave its `.sl`/`.slu` endpoint stranded on the string it left.
     const isSlide = (note) => slideTarget(note) !== null;
 
+    // Live occupancy index for collision checks. The previous implementation
+    // called notes.some(...) for every alternate of every note, turning a long
+    // standalone passage into O(n^2) work after the solver deadline had
+    // already finished. Sets preserve the old object-identity semantics while
+    // making the common lookup O(1); moves update the index in place.
+    const occupancy = new Map();
+    const occupants = (t, s, create = false) => {
+        let byString = occupancy.get(t);
+        if (!byString && create) {
+            byString = new Map();
+            occupancy.set(t, byString);
+        }
+        if (!byString) return null;
+        let atString = byString.get(s);
+        if (!atString && create) {
+            atString = new Set();
+            byString.set(s, atString);
+        }
+        return atString || null;
+    };
+    const addOccupant = note => occupants(note.t, note.s, true).add(note);
+    const moveOccupant = (note, fromS, toS) => {
+        const from = occupants(note.t, fromS);
+        if (from) {
+            from.delete(note);
+            if (from.size === 0) occupancy.get(note.t).delete(fromS);
+        }
+        occupants(note.t, toS, true).add(note);
+    };
+    for (const note of notes) addOccupant(note);
+
     for (let pass = 0; pass < HAND_TRAVEL_MAX_PASSES; pass += 1) {
         let changed = false;
         let i = 0;
@@ -351,7 +382,8 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
                 let collides = false;
                 for (let k = i; k < end && !collides; k += 1) {
                     const rn = notes[k];
-                    collides = notes.some(o => o !== rn && o.t === rn.t && o.s === altS);
+                    const atTarget = occupants(rn.t, altS);
+                    collides = !!atTarget && atTarget.size > (atTarget.has(rn) ? 1 : 0);
                 }
                 if (collides) continue;
                 const altScore = score(altF);
@@ -360,10 +392,12 @@ export function reduceHandTravel(notes, target, maxFret = DEFAULT_MAX_FRET, isEl
             if (best && best.score <= naturalScore - HAND_JUMP_MIN_IMPROVEMENT) {
                 for (let k = i; k < end; k += 1) {
                     const rn = notes[k];
+                    const oldS = rn.s;
                     rn.natS = rn.s;
                     rn.natF = rn.f;
                     rn.s = best.s;
                     rn.f = best.f;
+                    moveOccupant(rn, oldS, best.s);
                 }
                 changed = true;
             }
@@ -413,37 +447,6 @@ function exactCandidateFor(ctx, notes) {
         placements.push({ srcIndex: i, s: entry.s, f: entry.f, entry });
     }
     return placements.length ? placements : null;
-}
-
-// Exact same-string placements for every slide in a solver group. Each
-// option carries the complete materialization entry so the chosen endpoint
-// survives chord revoicing unchanged.
-function slidePlacementOptions(ctx, notes) {
-    const groups = [];
-    for (let i = 0; i < notes.length; i += 1) {
-        const note = notes[i];
-        const slide = slideTarget(note);
-        if (!slide) continue;
-        const sourceOpen = ctx.sourceOpenMidiByString[note.s];
-        const candidates = remapSlideCandidates(
-            sourceOpen,
-            ctx.naturalTargetByString[note.s],
-            note.f,
-            slide.to,
-            ctx.targetMidiTuning,
-            ctx.maxFret,
-            ctx.capo,
-        ) || [];
-        groups.push({
-            srcIndex: i,
-            options: candidates.map(candidate => {
-                const entry = { s: candidate.s, f: candidate.f };
-                entry[slide.field] = candidate.slideTo;
-                return { srcIndex: i, s: candidate.s, f: candidate.f, entry };
-            }),
-        });
-    }
-    return groups;
 }
 
 // Maximum-cardinality non-colliding slide subset. This is a small bipartite
@@ -506,8 +509,7 @@ function materializePlacements(notes, placements, revoiced, degradeLevel) {
 // node budget exhausted, or solver disabled): the pre-solver per-note
 // path, exact remap plus lower-pitch-wins collision resolution.
 // `degraded: true` marks the voicing as a fallback, informational only.
-function collisionPlacements(ctx, notes) {
-    const slideGroups = slidePlacementOptions(ctx, notes);
+function collisionPlacements(ctx, notes, slideGroups) {
     const fixedSlides = preferredSlideCombination(slideGroups);
     const taken = new Set(fixedSlides.map(placement => placement.s));
     const plainNotes = notes.filter(note => slideTarget(note) === null);
@@ -555,6 +557,10 @@ function solveGroup(cache, ctx, notes, templateName, jobCtl) {
     // ordinary note and accidentally carry the slide technique onto it.
     const workingNotes = [];
     const originalIndices = [];
+    // Build exact slide options while filtering impossible slides. The same
+    // immutable option groups are reused by the solver and every fallback;
+    // candidate discovery is intentionally not repeated on the render thread.
+    const slideGroups = [];
     for (let i = 0; i < notes.length; i += 1) {
         const note = notes[i];
         const slide = slideTarget(note);
@@ -569,6 +575,15 @@ function solveGroup(cache, ctx, notes, templateName, jobCtl) {
                 ctx.capo,
             );
             if (!candidates || candidates.length === 0) continue;
+            const srcIndex = workingNotes.length;
+            slideGroups.push({
+                srcIndex,
+                options: candidates.map(candidate => {
+                    const entry = { s: candidate.s, f: candidate.f };
+                    entry[slide.field] = candidate.slideTo;
+                    return { srcIndex, s: candidate.s, f: candidate.f, entry };
+                }),
+            });
         }
         originalIndices.push(i);
         workingNotes.push(note);
@@ -580,12 +595,11 @@ function solveGroup(cache, ctx, notes, templateName, jobCtl) {
         const oversize = workingNotes.length > MAX_SOLVER_GROUP_SIZE;
         if (oversize || (jobCtl && jobCtl.solverDisabled)) {
             if (oversize && jobCtl) jobCtl.stats.oversizeGroups += 1;
-            solved = collisionPlacements(ctx, workingNotes);
+            solved = collisionPlacements(ctx, workingNotes, slideGroups);
         } else {
             const nodeCap = jobCtl && jobCtl.maxSearchNodes != null ? jobCtl.maxSearchNodes : MAX_SEARCH_NODES;
             const budget = { nodes: nodeCap, aborted: false };
             const exact = exactCandidateFor(ctx, workingNotes);
-            const slideGroups = slidePlacementOptions(ctx, workingNotes);
             if (slideGroups.length === 0) {
                 solved = solveChord(spec, ctx.targetMidiTuning, exact, ctx.maxFret, { budget });
             } else {
@@ -648,7 +662,7 @@ function solveGroup(cache, ctx, notes, templateName, jobCtl) {
             }
             if (budget.aborted) {
                 if (jobCtl) jobCtl.stats.searchAborts += 1;
-                if (!solved) solved = collisionPlacements(ctx, workingNotes);
+                if (!solved) solved = collisionPlacements(ctx, workingNotes, slideGroups);
             }
         }
     }
@@ -696,11 +710,33 @@ export function createRetuner(opts) {
     let cacheCapo = null;
     let cacheStringCount = null;
     let cacheTargetSig = null;
+    let cacheSourceSig = null;
     let canonicalResult = { notes: [], chords: [], anchors: [], chordTemplates: [] };
     let canonicalWasRemapped = false;
     let projectionKey = null;
     let projectedResult = canonicalResult;
     const stats = { workMs: 0, searchAborts: 0, oversizeGroups: 0, solverDisabled: false };
+    const maxSupportedFret = Math.max(...MAX_FRET_OPTIONS);
+    const isDenseIntegerArray = (values, expectedLength) => {
+        if (!Array.isArray(values) || values.length !== expectedLength) return false;
+        for (let i = 0; i < values.length; i += 1) {
+            if (!Number.isInteger(values[i])) return false;
+        }
+        return true;
+    };
+    // Source arrays are mutable host-owned JSON data. Reference equality alone
+    // cannot distinguish a genuine cache hit from an in-place difficulty,
+    // note, template, anchor, or tuning edit. A full JSON signature is linear
+    // in chart size and _transform() runs only at rebuild/settings boundaries,
+    // never per animation frame. If unusual cyclic/non-JSON data cannot be
+    // serialized, returning null safely disables cache hits for that input.
+    const sourceContentSignature = (tuning, notes, chords, anchors, templates) => {
+        try {
+            return JSON.stringify([tuning, notes, chords, anchors, templates]);
+        } catch (_) {
+            return null;
+        }
+    };
 
     // The whole cold remap, synchronous. checkDeadline runs between work
     // units (one template / one same-onset note bucket / one chord) and
@@ -715,12 +751,12 @@ export function createRetuner(opts) {
                 stats.solverDisabled = true;
             }
         };
-        // Capo-inclusive: string-alignment only cares which strings are
-        // tuned alike, and capo shifts every string's open pitch equally
-        // so it doesn't change which shift best aligns source to target.
-        // octaveOffset (stage 3) is folded in here too — a flat shift
-        // applied unconditionally to every string, unlike the chart's own
-        // capo, which only conditionally floors a note's fret below.
+        // Capo-inclusive: arrangement alignment follows the chart's sounding
+        // open pitches. A uniform capo or octave shift can deliberately move
+        // the best alignment to neighboring target strings (for example, an
+        // E-standard chart at capo 5 aligns naturally with A/D/G/... strings).
+        // octaveOffset (stage 3) is folded in here too; unlike the chart capo,
+        // it shifts every source note unconditionally.
         const sourceOpenMidiByString = computeOpenStringMidiByString(sc, tuning, capo, octaveOffset);
         const shiftK = computeArrangementShift(sc, tuning, capo, sourceOpenMidiByString, target);
         const naturalTargetByString = [];
@@ -934,27 +970,62 @@ export function createRetuner(opts) {
     function apply(bundle, targetMidiTuning, maxFret = DEFAULT_MAX_FRET, retunerCapo = 0, octaveOffset = 0) {
         const target = (Array.isArray(targetMidiTuning) && targetMidiTuning.length >= 1)
             ? targetMidiTuning : DEFAULT_TARGET_MIDI_TUNING;
-        const rawNotes = bundle.notes;
-        const rawChords = bundle.chords;
-        const rawAnchors = bundle.anchors;
-        const rawTemplates = bundle.chordTemplates;
+        const suppliedNotes = bundle.notes;
+        const suppliedChords = bundle.chords;
+        const suppliedAnchors = bundle.anchors;
+        const suppliedTemplates = bundle.chordTemplates;
+        // apply() writes its result back onto the caller's bundle. If that
+        // same bundle is applied again, unwrap fields that are still our own
+        // latest output to the original source references. This keeps apply
+        // idempotent and lets a target/projection change re-solve from raw
+        // chart data instead of recursively retuning the prior result.
+        const hasPriorProjection = projectionKey !== null;
+        const rawNotes = hasPriorProjection && suppliedNotes === projectedResult.notes
+            ? cacheNotesRef : suppliedNotes;
+        const rawChords = hasPriorProjection && suppliedChords === projectedResult.chords
+            ? cacheChordsRef : suppliedChords;
+        const rawAnchors = hasPriorProjection && suppliedAnchors === projectedResult.anchors
+            ? cacheAnchorsRef : suppliedAnchors;
+        const rawTemplates = hasPriorProjection && suppliedTemplates === projectedResult.chordTemplates
+            ? cacheTemplatesRef : suppliedTemplates;
         const tuning = bundle.tuning;
-        const capo = bundle.capo | 0;
+        const rawCapo = bundle.capo;
+        const capo = Number.isInteger(rawCapo) ? rawCapo : 0;
         const sc = bundle.stringCount;
         // Sanitized independently from the solve signature: changing only
         // the output representation must re-project, never re-solve chords.
         const outputCapo = (Number.isInteger(retunerCapo) && retunerCapo > 0)
             ? retunerCapo : 0;
-        const oct = octaveOffset | 0;
+        const oct = Number.isInteger(octaveOffset) ? octaveOffset : 0;
+        const sourceMetadataValid = Number.isInteger(sc)
+            && sc >= 1
+            && sc <= MAX_SOURCE_STRING_COUNT
+            && isDenseIntegerArray(tuning, sc)
+            && Number.isInteger(rawCapo)
+            && rawCapo >= 0;
+        const targetMetadataValid = Array.isArray(target)
+            && target.length >= 1
+            && target.length <= MAX_TARGET_STRING_COUNT
+            && isDenseIntegerArray(target, target.length)
+            && Number.isInteger(maxFret)
+            && maxFret >= 1
+            && maxFret <= maxSupportedFret;
+        const inputsValid = sourceMetadataValid && targetMetadataValid;
         // '@' + maxFret: two profiles sharing the same strings but a
         // different max fret must NOT cache-hit each other's remap.
         // '#' + oct: stage 3's octave offset is no longer baked into
         // `target` by the caller, so it must be its own cache-key term.
-        const targetSig = target.join(',') + '@' + maxFret + '#' + oct;
-        const cacheHit = rawNotes === cacheNotesRef && rawChords === cacheChordsRef
+        const targetSig = inputsValid
+            ? target.join(',') + '@' + maxFret + '#' + oct
+            : 'invalid';
+        const sourceSig = inputsValid
+            ? sourceContentSignature(tuning, rawNotes, rawChords, rawAnchors, rawTemplates)
+            : 'invalid';
+        const cacheHit = sourceSig !== null
+            && rawNotes === cacheNotesRef && rawChords === cacheChordsRef
             && rawAnchors === cacheAnchorsRef && rawTemplates === cacheTemplatesRef
             && tuning === cacheTuningRef && capo === cacheCapo && sc === cacheStringCount
-            && targetSig === cacheTargetSig;
+            && targetSig === cacheTargetSig && sourceSig === cacheSourceSig;
 
         if (!cacheHit) {
             cacheNotesRef = rawNotes;
@@ -965,13 +1036,14 @@ export function createRetuner(opts) {
             cacheCapo = capo;
             cacheStringCount = sc;
             cacheTargetSig = targetSig;
+            cacheSourceSig = sourceSig;
             projectionKey = null;
             stats.workMs = 0;
             stats.searchAborts = 0;
             stats.oversizeGroups = 0;
             stats.solverDisabled = false;
 
-            if (!Number.isFinite(sc) || sc < 1 || !Array.isArray(tuning)) {
+            if (!inputsValid) {
                 // Fail-safe: pass the chart through unremapped.
                 canonicalResult = {
                     notes: Array.isArray(rawNotes) ? rawNotes : [],

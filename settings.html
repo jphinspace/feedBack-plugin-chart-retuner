@@ -80,9 +80,8 @@
         may use any tuning — a bass tuning on a guitar arrangement is
         fine. Add your own for AEADG, BbEbAbDbGb,
         a 7-string, or anything else. Strings can only be added/removed
-        from the ends, never the middle — a new string gets a fresh
-        default note + color; existing strings' colors never shift, and a
-        removed string's color is never remembered for later.
+        from the ends, never the middle; a new string gets a suggested
+        note that you can change.
     </p>
 
     <div class="mt-3">
@@ -108,8 +107,11 @@
     <div class="mt-4 rounded-lg border border-gray-800 bg-dark-700/40 p-3">
         <p class="text-xs font-medium text-gray-400 mb-2" id="cr3d-tuning-form-heading">Edit tuning</p>
         <p class="text-[10px] text-gray-500 mb-2">
-            Picking any tuning above — built-in or custom — opens it here,
-            and applies live as an unsaved preview while you tweak it.
+            Picking any tuning above — built-in or custom — opens it here.
+            Your edits apply immediately as one session-only live preview
+            across bass, rhythm, and lead; they do not modify any selected
+            or saved profile. The preview is discarded on Cancel, Save,
+            selecting another tuning, or restarting the plugin.
             Save is disabled until you change something. Editing a
             built-in preset names it “New custom preset N” and always
             saves as a new custom tuning — built-ins themselves can't be
@@ -245,7 +247,7 @@
         // Built-in presets straight from the module — ids, labels,
         // strings, and each preset's own maxFret (used to seed the form
         // when a preset is picked in a dropdown, and as
-        // activeSeedProfile's pre-load fallback). None are
+        // selectedProfileForCurrentArrangement's pre-load fallback). None are
         // editable/deletable, so they never appear in readCustom().
         const BUILTIN_PRESETS = CR.BUILTIN_PRESET_TUNINGS;
         const MIN_STRINGS = CR.MIN_TARGET_STRING_COUNT;
@@ -261,7 +263,7 @@
         const NOTE_OPTION_MIN_MIDI = 0;
         const NOTE_OPTION_MAX_MIDI = 76;
 
-        function readActiveId(cls) {
+        function readSelectedProfileId(cls) {
             const suffix = (PROFILE_CLASSES.find((p) => p.cls === cls) || PROFILE_CLASSES[0]).keySuffix;
             try {
                 const v = localStorage.getItem('chart_retuner_bg_targetTuningId' + suffix);
@@ -293,49 +295,26 @@
         function writeCustomFallback(list) {
             try { localStorage.setItem('chart_retuner_bg_customTunings', JSON.stringify(list)); } catch (_) { /* storage blocked */ }
         }
-        function writeActiveFallback(cls, id) {
+        function writeSelectedProfileFallback(cls, id) {
             const suffix = (PROFILE_CLASSES.find((p) => p.cls === cls) || PROFILE_CLASSES[0]).keySuffix;
             try { localStorage.setItem('chart_retuner_bg_targetTuningId' + suffix, id); } catch (_) { /* storage blocked */ }
         }
 
-        // Fallbacks for window.cr3dDefaultStringFor /
-        // cr3dResolveDisplayColor, for the narrow window before screen.js
-        // registers window.cr3d* (settings.html usually renders first).
-        // Note math comes from CR (defaultExtensionNote /
-        // colorRoleForNote); only the role -> hex table below is local —
-        // it mirrors screen.js's renderer-owned palette slots
-        // (PALETTES.default / _crColorForRole), which no src module
-        // exports by design. A stale color suggestion is the only cost:
-        // never lost, always editable after reload.
-        const FALLBACK_ROLE_HEX = { e: '#e61f26', a: '#ecd234', d: '#1096e6', g: '#f18313', highB: '#3fc413', highE: '#b518d9', lowExt1: '#ff6bd5', lowExt2: '#6bffe6' };
-        function fallbackColorForMidi(midi) {
-            const role = CR.colorRoleForNote(midi);
-            if (role === 'lowB') return CR.intToHex(CR.lowBColor());
-            return FALLBACK_ROLE_HEX[role] || CR.intToHex(CR.LIGHT_GRAY_COLOR);
-        }
+        // Default-note fallback for the narrow window before screen.js
+        // registers any settings bridges. The note math still comes from CR.
         function fallbackDefaultStringFor(direction, edgeNoteSpec) {
             const edgeMidi = midiFromNote(edgeNoteSpec);
             const base = edgeMidi != null ? edgeMidi : (direction === 'low' ? 23 : 43);
             const ext = CR.defaultExtensionNote(direction, base);
-            return { note: ext.label, color: fallbackColorForMidi(ext.midi) };
-        }
-        function fallbackResolveDisplayColor(strings, colors, index) {
-            if (Array.isArray(colors) && colors[index]) return colors[index];
-            const midi = midiFromNote(strings[index]);
-            const role = midi != null ? CR.colorRoleForNote(midi) : 'gray';
-            if (role === 'lowB') return CR.intToHex(CR.lowBColor());
-            return FALLBACK_ROLE_HEX[role] || (index === 0 ? CR.intToHex(CR.lowBColor()) : '#e61f26');
+            return { note: ext.label };
         }
         function defaultStringFor(direction, edgeNoteSpec) {
             return window.cr3dDefaultStringFor ? window.cr3dDefaultStringFor(direction, edgeNoteSpec) : fallbackDefaultStringFor(direction, edgeNoteSpec);
         }
-        function resolveDisplayColor(strings, colors, index) {
-            return window.cr3dResolveDisplayColor ? window.cr3dResolveDisplayColor(strings, colors, index) : fallbackResolveDisplayColor(strings, colors, index);
-        }
 
         // BEADG bass and E-standard guitar notes, by MIDI — highlighted in
         // every dropdown as familiar reference points (BEADG covers EADG's own notes too).
-        const BEADG_DEFAULT_MIDIS = CR.DEFAULT_TARGET_TUNING.map(midiFromNote);
+        const BEADG_REFERENCE_MIDIS = CR.BEADG_TARGET_TUNING.map(midiFromNote);
         const EADGBE_PRESET = BUILTIN_PRESETS.find((p) => p.id === CR.DEFAULT_GUITAR_TUNING_ID);
         const EADGBE_DEFAULT_MIDIS = EADGBE_PRESET ? EADGBE_PRESET.strings.map(midiFromNote) : [];
 
@@ -346,7 +325,7 @@
             selectEl.innerHTML = '';
             for (let midi = NOTE_OPTION_MIN_MIDI; midi <= NOTE_OPTION_MAX_MIDI; midi++) {
                 const label = CR.midiToNoteLabel(midi);
-                const isBeadgNote = BEADG_DEFAULT_MIDIS.includes(midi);
+                const isBeadgNote = BEADG_REFERENCE_MIDIS.includes(midi);
                 const isEadgbeNote = EADGBE_DEFAULT_MIDIS.includes(midi);
                 const opt = document.createElement('option');
                 opt.value = label;
@@ -386,9 +365,9 @@
         const deleteBtn = $('cr3d-tuning-delete');
         const cancelBtn = $('cr3d-tuning-cancel');
 
-        let editingId = null; // null = save creates a new custom tuning (builtin or unsaved base)
+        let editingId = null; // null = save creates a new custom tuning (builtin or preview base)
         let dirty = false;    // one-way flag: true once any field has changed since loadPreset()
-        let rows = []; // [{ note, color }], low to high — the editor's working state
+        let rows = []; // [{ note }], low to high — the editor's working state
         let maxFret = CR.DEFAULT_MAX_FRET; // the editor's working max-fret value
         let retunerCapo = 0;             // the editor's working retuner-capo fret (0 = no capo)
         let retunerCapoEnabled = false;  // the editor's working retuner-capo on/off state — off by default
@@ -408,26 +387,25 @@
             if (octaveLabel) octaveLabel.textContent = (octave > 0 ? '+' : '') + octave;
         }
 
-        // Live active-tuning push: any actual user edit persists the WHOLE form
-        // state as the silent unsaved "active" tuning (CR.ACTIVE_TUNING_ID),
-        // which the renderer overlays on every arrangement class
-        // immediately (no Save needed). Programmatic seeding (loadPreset)
-        // never pushes — only real edits do.
-        function pushActiveTuning() {
-            const activeTuning = {
+        // Publish one SESSION-ONLY GLOBAL PREVIEW. This deliberately overlays
+        // every arrangement class without changing any selected/saved profile;
+        // it models the physical instrument being tried right now. Programmatic
+        // form seeding never publishes—only actual user edits do. screen.js
+        // clears it at startup; selection, Cancel, and Save clear it explicitly.
+        function publishSessionPreview() {
+            const preview = {
                 strings: rows.map((r) => r.note),
-                colors: rows.map((r) => r.color),
                 maxFret: maxFret,
                 capo: retunerCapo,
                 capoEnabled: retunerCapoEnabled,
                 octaveOffset: octave,
             };
-            if (window.cr3dWriteActiveTuning) { window.cr3dWriteActiveTuning(activeTuning); return; }
-            try { localStorage.setItem('chart_retuner_bg_activeTuning', JSON.stringify(activeTuning)); } catch (_) { /* storage blocked */ }
+            if (window.cr3dWriteSessionPreviewTuning) { window.cr3dWriteSessionPreviewTuning(preview); return; }
+            try { localStorage.setItem('chart_retuner_bg_sessionPreviewTuning', JSON.stringify(preview)); } catch (_) { /* storage blocked */ }
         }
-        function clearActiveTuningFallback() {
-            if (window.cr3dClearActiveTuning) { window.cr3dClearActiveTuning(); return; }
-            try { localStorage.setItem('chart_retuner_bg_activeTuning', ''); } catch (_) { /* storage blocked */ }
+        function discardSessionPreview() {
+            if (window.cr3dClearSessionPreviewTuning) { window.cr3dClearSessionPreviewTuning(); return; }
+            try { localStorage.setItem('chart_retuner_bg_sessionPreviewTuning', ''); } catch (_) { /* storage blocked */ }
         }
         // Arrangement class for a fresh form: a live song's arrangement if
         // one is loaded, else the core "Default arrangement" gameplay
@@ -447,9 +425,9 @@
         // current arrangement class, with any mid-song capo/octave quick
         // adjustment applied on top — reads localStorage directly rather
         // than screen.js's bridge, so it never depends on script load order.
-        function activeSeedProfile() {
+        function selectedProfileForCurrentArrangement() {
             const cls = currentArrClass();
-            const id = readActiveId(cls);
+            const id = readSelectedProfileId(cls);
             const pool = BUILTIN_PRESETS.concat(readCustom());
             const profile = pool.find((p) => p.id === id) || BUILTIN_PRESETS[0];
             const ov = readOverrideFor(profile.id);
@@ -470,10 +448,10 @@
 
         // Custom tunings first (editable/deletable — picking one opens it
         // below), then an unselectable divider, then the built-in presets.
-        function renderActiveDropdowns() {
+        function renderProfileDropdowns() {
             const custom = readCustom();
             for (const { cls, el } of sels) {
-                const activeId = readActiveId(cls);
+                const selectedId = readSelectedProfileId(cls);
                 el.innerHTML = '';
                 for (const p of custom) {
                     const opt = document.createElement('option');
@@ -496,7 +474,7 @@
                 // A stale/deleted id falls back to the class's built-in
                 // default rather than leaving the dropdown on a
                 // nonexistent selection.
-                el.value = (BUILTIN_PRESETS.some((p) => p.id === activeId) || custom.some((p) => p.id === activeId)) ? activeId : defaultIdFor(cls);
+                el.value = (BUILTIN_PRESETS.some((p) => p.id === selectedId) || custom.some((p) => p.id === selectedId)) ? selectedId : defaultIdFor(cls);
             }
         }
 
@@ -517,16 +495,8 @@
                 const noteSelect = document.createElement('select');
                 noteSelect.className = 'cr3d-row-note flex-1 min-w-0 bg-dark-700 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 outline-none';
                 populateNoteOptions(noteSelect, r.note);
-                noteSelect.addEventListener('change', () => { rows[i].note = noteSelect.value; pushActiveTuning(); onFieldChanged(); });
+                noteSelect.addEventListener('change', () => { rows[i].note = noteSelect.value; publishSessionPreview(); onFieldChanged(); });
                 rowDiv.appendChild(noteSelect);
-
-                const colorInput = document.createElement('input');
-                colorInput.type = 'color';
-                colorInput.value = r.color;
-                colorInput.title = 'String ' + (i + 1) + ' color';
-                colorInput.className = 'cr3d-row-color w-8 h-8 rounded border border-gray-800 bg-dark-700 shrink-0 p-0';
-                colorInput.addEventListener('input', () => { rows[i].color = colorInput.value; pushActiveTuning(); onFieldChanged(); });
-                rowDiv.appendChild(colorInput);
 
                 // Only the current top and bottom rows can be removed —
                 // strings may only be added/removed from the ends, never
@@ -537,7 +507,7 @@
                     removeBtn.className = 'text-[10px] px-2 py-1 rounded bg-dark-700 border border-gray-800 text-red-400 hover:text-red-300 shrink-0 disabled:opacity-30 disabled:pointer-events-none';
                     removeBtn.textContent = 'Remove';
                     removeBtn.disabled = rows.length <= MIN_STRINGS;
-                    removeBtn.addEventListener('click', () => { rows.splice(i, 1); renderRows(); pushActiveTuning(); onFieldChanged(); });
+                    removeBtn.addEventListener('click', () => { rows.splice(i, 1); renderRows(); publishSessionPreview(); onFieldChanged(); });
                     rowDiv.appendChild(removeBtn);
                 } else {
                     const spacer = document.createElement('span');
@@ -564,7 +534,7 @@
         }
 
         function seedRowsFromProfile(profile) {
-            rows = profile.strings.map((note, i) => ({ note, color: resolveDisplayColor(profile.strings, profile.colors, i) }));
+            rows = profile.strings.map(note => ({ note }));
             maxFret = CR.isValidMaxFret(profile.maxFret) ? profile.maxFret : CR.DEFAULT_MAX_FRET;
             if (maxFretSelect) maxFretSelect.value = String(maxFret);
             const resolved = CR.resolveRetunerCapoOctaveFields(profile, maxFret);
@@ -574,12 +544,12 @@
             syncAdjustControls();
         }
         // Builtin and custom presets load the same way. `seed` (optional)
-        // defaults to the resolved active tuning (activeSeedProfile) — the
+        // defaults to the selected profile for the current arrangement — the
         // dropdown-change flow passes the just-selected preset explicitly.
         // A custom base can be saved in place (editingId set, Delete
         // shown); a builtin base always saves as a new custom tuning.
         function loadPreset(seed) {
-            const profile = seed || activeSeedProfile();
+            const profile = seed || selectedProfileForCurrentArrangement();
             const isCustom = readCustom().some((p) => p.id === profile.id);
             editingId = isCustom ? profile.id : null;
             if (nameInput) nameInput.value = isCustom ? profile.name : '';
@@ -621,21 +591,21 @@
                 // back to its own class default (mirrors
                 // cr3dDeleteCustomTuning's loop in screen.js).
                 for (const { cls } of PROFILE_CLASSES) {
-                    if (readActiveId(cls) === profile.id) writeActiveFallback(cls, defaultIdFor(cls));
+                    if (readSelectedProfileId(cls) === profile.id) writeSelectedProfileFallback(cls, defaultIdFor(cls));
                 }
             }
             if (editingId === profile.id) loadPreset();
-            renderActiveDropdowns();
+            renderProfileDropdowns();
         }
 
         for (const { cls, el } of sels) {
             el.addEventListener('change', () => {
-                if (window.cr3dSetActiveTuning) {
-                    // cr3dSetActiveTuning discards the unsaved active tuning itself.
-                    window.cr3dSetActiveTuning(cls, el.value);
+                if (window.cr3dSelectTuningProfile) {
+                    // Selecting a profile discards the session preview first.
+                    window.cr3dSelectTuningProfile(cls, el.value);
                 } else {
-                    writeActiveFallback(cls, el.value);
-                    clearActiveTuningFallback();
+                    writeSelectedProfileFallback(cls, el.value);
+                    discardSessionPreview();
                 }
                 const pool = BUILTIN_PRESETS.concat(readCustom());
                 loadPreset(pool.find((p) => p.id === el.value));
@@ -644,10 +614,9 @@
 
         if (cancelBtn) {
             cancelBtn.addEventListener('click', () => {
-                // Discard the unsaved active-tuning overlay too — otherwise
-                // it keeps silently overriding every arrangement class's
-                // playback even after "cancelling" out of editing it.
-                clearActiveTuningFallback();
+                // Cancel means discard the global session preview and return
+                // to the selected arrangement profile.
+                discardSessionPreview();
                 loadPreset();
             });
         }
@@ -666,7 +635,7 @@
                 const next = defaultStringFor('low', rows[0] ? rows[0].note : 'B0');
                 rows.unshift(next);
                 renderRows();
-                pushActiveTuning();
+                publishSessionPreview();
                 onFieldChanged();
             });
         }
@@ -676,7 +645,7 @@
                 const next = defaultStringFor('high', rows[rows.length - 1] ? rows[rows.length - 1].note : 'G2');
                 rows.push(next);
                 renderRows();
-                pushActiveTuning();
+                publishSessionPreview();
                 onFieldChanged();
             });
         }
@@ -695,11 +664,10 @@
                     return;
                 }
                 const strings = rows.map((r) => r.note);
-                const colors = rows.map((r) => r.color);
                 const savedMaxFret = CR.isValidMaxFret(maxFret) ? maxFret : CR.DEFAULT_MAX_FRET;
                 const { capo: savedCapo, capoEnabled: savedCapoEnabled, octaveOffset: savedOctave } =
                     CR.resolveRetunerCapoOctaveFields({ capo: retunerCapo, capoEnabled: retunerCapoEnabled, octaveOffset: octave }, savedMaxFret);
-                const profile = { name: name, strings: strings, colors: colors, maxFret: savedMaxFret, capo: savedCapo, capoEnabled: savedCapoEnabled, octaveOffset: savedOctave };
+                const profile = { name: name, strings: strings, maxFret: savedMaxFret, capo: savedCapo, capoEnabled: savedCapoEnabled, octaveOffset: savedOctave };
                 if (editingId) profile.id = editingId;
                 let savedId = null;
                 if (window.cr3dSaveCustomTuning) {
@@ -707,17 +675,17 @@
                 } else {
                     const list = readCustom();
                     const id = editingId || ('custom_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
-                    const entry = { id: id, name: name, strings: strings, colors: colors, maxFret: savedMaxFret, capo: savedCapo, capoEnabled: savedCapoEnabled, octaveOffset: savedOctave };
+                    const entry = { id: id, name: name, strings: strings, maxFret: savedMaxFret, capo: savedCapo, capoEnabled: savedCapoEnabled, octaveOffset: savedOctave };
                     const idx = list.findIndex((p) => p.id === id);
                     if (idx >= 0) list[idx] = entry; else list.push(entry);
                     writeCustomFallback(list);
-                    // Mirrors cr3dSaveCustomTuning: saving graduates the
-                    // active tuning, so its storage slot empties.
-                    clearActiveTuningFallback();
+                    // Saving graduates the preview to a persistent custom
+                    // tuning, then empties the preview transport slot.
+                    discardSessionPreview();
                     savedId = id;
                 }
                 if (!savedId) { showError('Could not save — check each string is a valid note + octave.'); return; }
-                renderActiveDropdowns();
+                renderProfileDropdowns();
                 // Re-open the saved entry: now a real custom tuning (Delete
                 // shown, Save disabled again until it's next changed).
                 loadPreset(readCustom().find((p) => p.id === savedId));
@@ -738,7 +706,7 @@
                 // Keep the capo slider's ceiling on the new neck (and
                 // clamp a now-impossible working capo).
                 syncAdjustControls();
-                pushActiveTuning();
+                publishSessionPreview();
                 onFieldChanged();
             });
         }
@@ -747,7 +715,7 @@
             capoEnabledCheckbox.addEventListener('change', () => {
                 retunerCapoEnabled = capoEnabledCheckbox.checked;
                 syncAdjustControls();
-                pushActiveTuning();
+                publishSessionPreview();
                 onFieldChanged();
             });
         }
@@ -756,7 +724,7 @@
                 const v = parseInt(capoSlider.value, 10);
                 retunerCapo = CR.resolveCapo(v, maxFret);
                 syncAdjustControls();
-                pushActiveTuning();
+                publishSessionPreview();
                 onFieldChanged();
             });
         }
@@ -765,14 +733,14 @@
                 const v = parseInt(octaveSlider.value, 10);
                 octave = CR.resolveOctaveOffset(v);
                 syncAdjustControls();
-                pushActiveTuning();
+                publishSessionPreview();
                 onFieldChanged();
             });
         }
 
-        renderActiveDropdowns();
+        renderProfileDropdowns();
         // The dropdowns don't need defaultArrangement, but the initial
-        // form seed does (activeSeedProfile -> currentArrClass) — wait for
+        // form seed does (selectedProfileForCurrentArrangement -> currentArrClass) — wait for
         // the one real async dependency instead of guessing with a timer.
         fetch('/api/settings').then((r) => r.json()).catch(() => ({}))
             .then((data) => {

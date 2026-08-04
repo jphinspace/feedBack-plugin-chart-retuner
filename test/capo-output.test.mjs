@@ -2,16 +2,14 @@
 // result is capo-relative; this module verifies both supported host views
 // without invoking the solver.
 import test from 'node:test';
-import assert from 'node:assert';
-import { CR } from '../src/chart-retune.js';
-
-const {
+import assert from 'node:assert/strict';
+import {
     CAPO_OUTPUT_MODE,
     CAPO_OUTPUT_MODES,
     capoForOutput,
     projectCapoOutput,
     resolveCapoOutputMode,
-} = CR;
+} from '../src/capo-output.js';
 
 test('physical capo projection shifts positions but preserves open and sentinel semantics', () => {
     const canonical = {

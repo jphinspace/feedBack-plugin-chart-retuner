@@ -1,10 +1,10 @@
 // Chart Retuner — shared test fixtures for the split retune-engine test
-// suite (target-tuning/target-capo/source-tuning/retune-engine/note-anchors/
-// string-colors). Not a *.test.mjs itself, so `node --test test/*.test.mjs`
+// suite (target-tuning/target-capo/source-tuning/retune-engine/note-anchors).
+// Not a *.test.mjs itself, so `node --test test/*.test.mjs`
 // never tries to run it standalone.
-import { CR } from '../src/chart-retune.js';
-
-const { computeOpenStringMidiByString, computeArrangementShift, resolveTargetTuning } = CR;
+import { computeOpenStringMidiByString } from '../src/source-tuning.js';
+import { computeArrangementShift } from '../src/retune-engine.js';
+import { resolveTargetTuning } from '../src/target-tuning.js';
 
 // Mirrors what createRetuner().apply() does once per song: compute k, then
 // per-string open-note MIDI pitches and natural targets. `octaveOffset`
@@ -51,11 +51,12 @@ export const cloneAnchors = anchors => anchors.map(a => ({ ...a }));
 // anchors, templates, tuning, capo, sc }) rather than makeBundle's
 // overrides-object shape — used by the pathological-safety-valve tests
 // and the revoiced-bucket anchor-fallback test, which both already build
-// their fixtures in this shape.
+// their fixtures in this shape. Keep values literal: a test factory must
+// not sanitize malformed input before the production boundary sees it.
 export function bundleFromRaw(raw) {
     return {
         notes: raw.notes, chords: raw.chords, anchors: raw.anchors,
         chordTemplates: raw.templates,
-        tuning: raw.tuning, capo: raw.capo | 0, stringCount: raw.sc,
+        tuning: raw.tuning, capo: raw.capo, stringCount: raw.sc,
     };
 }

@@ -402,6 +402,44 @@ rather than emitting a musically false interval. Coverage includes chart
 capos, upward/downward slides, adjacent-string relocation, chord
 collisions, non-monotonic tunings, and impossible endpoints.
 
+**Phase 25 — Bounded hand travel, idempotent apply, and strict engine
+inputs (2026-08-04).** `reduceHandTravel` now maintains a live
+time/string occupancy index instead of rescanning the entire chart for
+every alternate-string candidate, removing quadratic work that sat
+outside the solver's deadline. `createRetuner().apply()` recognizes the
+arrays it wrote on its previous call and unwraps them to the cached raw
+chart references, so applying the same bundle again is idempotent and a
+target/capo-projection switch always starts from source notes rather than
+recursively retuning prior output. The engine fail-safe now rejects
+fractional, oversized, or tuning-mismatched source string counts; sparse
+or non-integer tuning/target arrays; and non-finite/out-of-range fret
+ceilings before any loop-controlling metadata reaches the solver. Added
+long-passage complexity, repeated-apply, projection-switch, target-switch,
+and malformed-boundary regressions.
+
+**Phase 26 — Test boundaries and deterministic complexity coverage
+(2026-08-04).** The split unit suites now import symbols from their defining
+modules instead of reaching every dependency through the `chart-retune.js`
+barrel. A dedicated barrel-contract test verifies that `CR` exposes the exact
+combined public API and rejects conflicting duplicate exports. Shared bundle
+fixtures no longer coerce input before it reaches production validation, all
+suites use Node's strict assertion API, browser storage is stubbed explicitly,
+and the hand-travel complexity regression counts timestamp accesses instead
+of relying on a wall-clock threshold that could flake under CI load.
+
+**Phase 27 — Color-state removal and explicit session previews
+(2026-08-04).** Removed per-string color selection, preset palettes, saved
+color fields, the dead `string-colors.js` module, and its tests. A
+chart-transform provider has no downstream color field, and this plugin no
+longer owns a renderer, so retaining editable color state falsely promised a
+visible effect. Existing custom-tuning blobs with legacy `colors` fields remain
+readable; resolution ignores the field and the next save drops it. Renamed the
+ad-hoc `activeTuning` concept throughout live code to a session preview and
+documented its lifecycle at each boundary: one intentional global preview
+across arrangement classes, never a saved profile, cleared on startup, preset
+selection, Cancel, or Save. The old storage key is cleared during startup
+migration. Version 0.8.1.
+
 ## Upstream sync log (historical — closed by Phase 19)
 
 Procedure: see PLANNING.md ("Syncing from upstream") — the pre-Phase-19

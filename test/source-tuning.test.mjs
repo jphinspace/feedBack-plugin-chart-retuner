@@ -1,14 +1,19 @@
 // Standalone Node verification for stage 3 (chart tuning/native-capo/
 // octave-offset -> source open-string pitches). Independent of stages 1-2
-// — none of this reads the target tuning at all. Imports the real engine
-// from ../src/chart-retune.js — no hand-synced duplicate. Run with
+// — none of this reads the target tuning at all. Imports the stage directly
+// so the module boundary is covered. Run with
 // `node test/source-tuning.test.mjs`.
 import test from 'node:test';
-import assert from 'node:assert';
-import { CR } from '../src/chart-retune.js';
+import assert from 'node:assert/strict';
+import {
+    STANDARD_OPEN_STRING_MIDI,
+    MAX_SOURCE_STRING_COUNT,
+    standardOpenStringMidi,
+    sourceOpenStringMidi,
+    computeOpenStringMidiByString,
+} from '../src/source-tuning.js';
+import { createRetuner } from '../src/retune-engine.js';
 import { makeBundle, EADG, EADGBE } from './helpers.mjs';
-
-const { STANDARD_OPEN_STRING_MIDI, standardOpenStringMidi, sourceOpenStringMidi, computeOpenStringMidiByString, createRetuner } = CR;
 
 // standardOpenStringMidi / sourceOpenStringMidi / computeOpenStringMidiByString:
 // pure unit coverage, focused on the octaveOffset parameter (the new
@@ -17,6 +22,7 @@ const { STANDARD_OPEN_STRING_MIDI, standardOpenStringMidi, sourceOpenStringMidi,
 test('standardOpenStringMidi / sourceOpenStringMidi / computeOpenStringMidiByString', () => {
     assert.deepStrictEqual(standardOpenStringMidi(4), STANDARD_OPEN_STRING_MIDI[4]);
     assert.deepStrictEqual(standardOpenStringMidi(6), STANDARD_OPEN_STRING_MIDI[6]);
+    assert.equal(MAX_SOURCE_STRING_COUNT, 8);
     // Unknown string counts fall back to the 6-string table.
     assert.deepStrictEqual(standardOpenStringMidi(3), STANDARD_OPEN_STRING_MIDI[6]);
 

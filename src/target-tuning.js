@@ -9,7 +9,7 @@ import { DEFAULT_MAX_FRET } from './common.js';
 
 // Selectable ceiling for a tuning profile's remap range (settings.html's
 // "Max fret" dropdown + each BUILTIN_PRESET_TUNINGS entry below). 24 is
-// the render/UI-safe top of the list, used as the fallback default.
+// the render/UI-safe top of the list and the shared fallback default.
 export const MAX_FRET_OPTIONS = [12, 14, 20, 21, 22, 24];
 export function isValidMaxFret(v) {
     return MAX_FRET_OPTIONS.indexOf(v) !== -1;
@@ -70,110 +70,85 @@ export const MIN_TARGET_STRING_COUNT = 4;
 // other chart/pitch uses; this boundary belongs to custom tuning validation.
 export const MIN_TARGET_MIDI = 0;
 export const MAX_TARGET_MIDI = 76;
-export const DEFAULT_TARGET_TUNING = ['B0', 'E1', 'A1', 'D2', 'G2'];
-// Fallback chain for resolveTargetTuning (entries past index 4) and the
-// note->color-role table in string-colors.js. EXTENDED_CORE_INDEX is the
-// index of 'B0', so DEFAULT_TARGET_TUNING[i] === EXTENDED_DEFAULT_TARGET_TUNING[EXTENDED_CORE_INDEX + i].
-export const EXTENDED_DEFAULT_TARGET_TUNING = ['C#0', 'F#0', 'B0', 'E1', 'A1', 'D2', 'G2', 'B2', 'E3', 'A3'];
-export const EXTENDED_CORE_INDEX = 2;
+// The actual bass default and the explicitly selectable BEADG extension.
+// Keep these names honest: BEADG is a preset/reference tuning, never an
+// implicit product or engine default.
+export const DEFAULT_TARGET_TUNING = ['E1', 'A1', 'D2', 'G2'];
+export const BEADG_TARGET_TUNING = ['B0', ...DEFAULT_TARGET_TUNING];
+// Generic low-to-high extension chain used only for per-position recovery of
+// malformed entries in otherwise valid 5-8 string arrays.
+export const EXTENDED_TARGET_TUNING = ['C#0', 'F#0', 'B0', 'E1', 'A1', 'D2', 'G2', 'B2', 'E3', 'A3'];
+export const BEADG_EXTENDED_INDEX = 2;
 
-// Built-in tuning presets for the Active tuning dropdowns — not
+// Built-in tuning presets for the per-arrangement profile dropdowns — not
 // user-editable/deletable. DEFAULT_TUNING_ID/DEFAULT_GUITAR_TUNING_ID
 // (below) name the per-class defaults.
-//
-// `colors: null` derives from note identity (colorRoleForNote, falling
-// back to lowBColor for the low string); EADG/BEADG share this since
-// EADG's strings ARE BEADG's own E/A/D/G minus the low B. Guitar presets
-// instead carry an explicit per-position `roles` array, since their
-// guitar-octave notes sit outside the bass note-identity chain. Every
-// other preset carries concrete hand-picked, note-parallel colors.
-//
-// `maxFret`: EADG keeps DEFAULT_MAX_FRET (20); most other presets use 24;
-// violin and mandolin (short-necked) use 14.
+// `maxFret`: EADG deliberately uses 20; most other presets and the fallback
+// default use 24; violin and mandolin (short-necked) use 14.
 export const BUILTIN_PRESET_TUNINGS = [
     {
         id: 'eadg',
         label: 'EADG (default)',
-        // Standard 4-string bass — DEFAULT_TARGET_TUNING's own E/A/D/G
-        // strings, without the low B.
-        strings: DEFAULT_TARGET_TUNING.slice(1),
-        colors: null,
+        strings: DEFAULT_TARGET_TUNING,
         maxFret: 20,
     },
     {
         id: 'beadg',
         label: 'BEADG',
-        strings: DEFAULT_TARGET_TUNING,
-        colors: null,
+        strings: BEADG_TARGET_TUNING,
         maxFret: 24,
     },
     {
         id: 'upright_solo_fsbea',
         label: 'Upright bass solo (F#BEA)',
-        // Double-bass solo tuning (EADG up a whole step). Roles are
-        // position-parallel to EADG, since it's still a 4-string bass.
+        // Double-bass solo tuning (EADG up a whole step).
         strings: ['F#1', 'B1', 'E2', 'A2'],
-        colors: null,
-        roles: ['e', 'a', 'd', 'g'],
         maxFret: 24,
     },
     {
         id: 'eadgbe',
         label: 'EADGBE (guitar)',
         strings: ['E2', 'A2', 'D3', 'G3', 'B3', 'E4'],
-        colors: null,
-        roles: ['e', 'a', 'd', 'g', 'highB', 'highE'],
         maxFret: 24,
     },
     {
         id: 'beadgbe',
         label: 'BEADGBE (7-string guitar)',
-        // EADGBE plus a low B, which takes the dedicated 'lowB' role.
+        // EADGBE plus a low B.
         strings: ['B1', 'E2', 'A2', 'D3', 'G3', 'B3', 'E4'],
-        colors: null,
-        roles: ['lowB', 'e', 'a', 'd', 'g', 'highB', 'highE'],
         maxFret: 24,
     },
     {
         id: 'baritone_beadfsb',
         label: 'Baritone (BEADF#B)',
-        // Standard guitar down a perfect fourth. Roles are
-        // position-parallel to EADGBE, since it's still a 6-string guitar.
+        // Standard guitar down a perfect fourth.
         strings: ['B1', 'E2', 'A2', 'D3', 'F#3', 'B3'],
-        colors: null,
-        roles: ['e', 'a', 'd', 'g', 'highB', 'highE'],
         maxFret: 24,
     },
     {
         id: 'cello_cgda',
         label: 'Cello (CGDA)',
         strings: ['C2', 'G2', 'D3', 'A3'],
-        colors: ['#cc00aa', '#f18313', '#3fc413', '#ecd234'],
         maxFret: 24,
     },
     {
         id: 'viola_cgda',
         label: 'Viola (CGDA)',
-        // Cello's note names an octave up; same note-parallel colors.
+        // Cello's note names an octave up.
         strings: ['C3', 'G3', 'D4', 'A4'],
-        colors: ['#cc00aa', '#f18313', '#3fc413', '#ecd234'],
         maxFret: 24,
     },
     {
         id: 'violin_gdae',
         label: 'Violin (GDAE)',
-        // Fixed colors like Cello: G/D/A reuse Cello's note-parallel
-        // hues, E adds a red.
         strings: ['G3', 'D4', 'A4', 'E5'],
-        colors: ['#f18313', '#3fc413', '#ecd234', '#e61f26'],
         maxFret: 14,
     },
     {
         id: 'banjo4_cgbd',
         label: 'Banjo 4-string (CGBD)',
-        // Plectrum banjo. Note-parallel family hues; B adds a blue.
+        // Plectrum banjo.
         strings: ['C3', 'G3', 'B3', 'D4'],
-        colors: ['#cc00aa', '#f18313', '#1096e6', '#3fc413'],
         maxFret: 24,
     },
     {
@@ -183,9 +158,8 @@ export const BUILTIN_PRESET_TUNINGS = [
         // is written drone-first), so this tuning is deliberately
         // non-monotonic — handled by resolveTargetForFret's pitch-ordered
         // walk. The drone's short neck (no frets below its 5th) is not
-        // modeled. Duplicate notes share their note-parallel hue.
+        // modeled.
         strings: ['G4', 'D3', 'G3', 'B3', 'D4'],
-        colors: ['#f18313', '#3fc413', '#f18313', '#1096e6', '#3fc413'],
         maxFret: 24,
     },
     {
@@ -193,30 +167,25 @@ export const BUILTIN_PRESET_TUNINGS = [
         label: 'Ukulele (gCEA)',
         // Standard reentrant ukulele: string 0 is the HIGH G4, above the
         // C that follows it, so — like banjo5_gdgbd — this is a
-        // non-monotonic target too. Note-parallel hues reuse the
-        // banjo/cello/violin picks. 12 frets for a soprano/concert neck.
+        // non-monotonic target too. 12 frets for a soprano/concert neck.
         strings: ['G4', 'C4', 'E4', 'A4'],
-        colors: ['#f18313', '#cc00aa', '#e61f26', '#ecd234'],
         maxFret: 12,
     },
     {
         id: 'baritone_uke_dgbe',
         label: 'Baritone ukulele (DGBE)',
         // Linear (non-reentrant) baritone uke: the top four strings of a
-        // standard guitar. Note-parallel hues follow the banjo/violin
-        // picks. 20 is the closest selectable ceiling to its real
+        // standard guitar. 20 is the closest selectable ceiling to its real
         // ~18-19 fret neck.
         strings: ['D3', 'G3', 'B3', 'E4'],
-        colors: ['#3fc413', '#f18313', '#1096e6', '#e61f26'],
         maxFret: 20,
     },
     {
         id: 'mandolin_ggddaaee',
         label: 'Mandolin (GGDDAAEE)',
         // Four paired courses, violin notes doubled — 8 strings, the
-        // render maximum. Each course pair shares one color.
+        // render maximum.
         strings: ['G3', 'G3', 'D4', 'D4', 'A4', 'A4', 'E5', 'E5'],
-        colors: ['#f18313', '#f18313', '#3fc413', '#3fc413', '#ecd234', '#ecd234', '#e61f26', '#e61f26'],
         maxFret: 14,
     },
 ];
@@ -254,40 +223,40 @@ export function arrangementClassFor(arrangementName) {
     return 'rhythm';
 }
 
-// Resolves an active-tuning id to { id, strings, colors, roles, maxFret,
+// Resolves a selected tuning-profile id to { id, strings, maxFret,
 // capo, capoEnabled, octaveOffset }: built-in presets first (unset id
 // falls back to the arrangement class's default), then a caller-supplied
 // custom-tuning list, then the class-default preset for an id matching
 // neither. `id` is the RESOLVED id, which screen.js keys per-tuning
-// capo/octave overrides by. `roles` is non-null only for a preset
-// carrying an explicit role array. `capo` is validated against the
-// profile's OWN maxFret, so shrinking it below a saved capo silently
+// capo/octave overrides by. `capo` is validated against the profile's
+// OWN maxFret, so shrinking it below a saved capo silently
 // disables the capo. Pure: the caller owns reading `id`/`customTunings`
 // from storage.
-export function resolveActiveTuning(id, customTunings, arrClass = 'bass') {
+export function resolveSelectedTuningProfile(id, customTunings, arrClass = 'bass') {
     const targetId = id || defaultTuningIdForClass(arrClass);
-    // .slice() on preset strings/roles: they're shared module constants,
-    // so each call returns a fresh, safely mutable copy. found.strings
-    // (the custom-tuning branch) is already a fresh per-read copy from
-    // the caller, so it's returned as-is.
+    // Every branch returns a fresh string array. Presets are shared module
+    // constants and custom profiles remain caller-owned, so neither may be
+    // exposed for mutation through the resolved result.
     const asResult = p => ({
         id: p.id,
         strings: p.strings.slice(),
-        colors: p.colors,
-        roles: Array.isArray(p.roles) ? p.roles.slice() : null,
         maxFret: p.maxFret,
         ...resolveRetunerCapoOctaveFields(p, p.maxFret),
     });
     const preset = BUILTIN_PRESET_TUNINGS.find(p => p.id === targetId);
     if (preset) return asResult(preset);
-    const found = Array.isArray(customTunings) ? customTunings.find(p => p.id === targetId) : null;
+    // Validate again at the resolver boundary instead of relying on every
+    // caller to have filtered persisted/custom data first. A malformed entry
+    // with the requested id is skipped in favor of another valid match or the
+    // arrangement default.
+    const found = Array.isArray(customTunings)
+        ? customTunings.find(p => p && p.id === targetId && isValidTuningStringsArray(p.strings))
+        : null;
     if (found) {
         const maxFret = isValidMaxFret(found.maxFret) ? found.maxFret : DEFAULT_MAX_FRET;
         return {
             id: found.id,
-            strings: found.strings,
-            colors: found.colors,
-            roles: null,
+            strings: found.strings.slice(),
             maxFret,
             ...resolveRetunerCapoOctaveFields(found, maxFret),
         };
@@ -295,22 +264,21 @@ export function resolveActiveTuning(id, customTunings, arrClass = 'bass') {
     return asResult(BUILTIN_PRESET_TUNINGS.find(p => p.id === defaultTuningIdForClass(arrClass)));
 }
 
-// The silent auto-saved "active" tuning: the unsaved user-defined
-// tuning the settings editor edits live. Any form change persists the
-// whole form state as the active tuning, and resolution overlays it on
-// every arrangement class until the user selects a real tuning (which
-// discards it). Stays out of every picker and saved-tunings pool; this
-// reserved id lets callers (quick-adjust sliders, name lookups)
-// recognize it.
-export const ACTIVE_TUNING_ID = '__user_defined__';
-export const ACTIVE_TUNING_NAME = 'User-defined';
+// Session-only live preview for ad-hoc tuning edits. This is intentionally
+// ONE global overlay, not a fourth saved profile: while the user edits the
+// instrument in Settings, every arrangement class previews that instrument.
+// It never enters a picker or the saved-custom pool, and screen.js clears it
+// on startup, preset selection, Cancel, or Save. The localStorage slot is only
+// a bridge between settings.html and screen.js; it is not durable user data.
+export const SESSION_PREVIEW_TUNING_ID = '__session_preview__';
+export const SESSION_PREVIEW_TUNING_NAME = 'User-defined live preview';
 
-// Parses + validates the persisted active tuning (JSON string or an
-// already-parsed object). Returns resolveActiveTuning's shape, with
-// id/name fixed to the active-tuning constants, or null when
+// Parses + validates the session-preview transport value (JSON string or an
+// already-parsed object). Returns resolveSelectedTuningProfile's shape, with
+// id/name fixed to the session-preview constants, or null when
 // absent/malformed. Same capo/octaveOffset/capoEnabled rules as a saved
-// custom tuning; colors pass through as stored.
-export function parseActiveTuning(raw) {
+// custom tuning.
+export function parseSessionPreviewTuning(raw) {
     let d = raw;
     if (typeof d === 'string') {
         const s = d.trim();
@@ -321,11 +289,9 @@ export function parseActiveTuning(raw) {
     if (!isValidTuningStringsArray(d.strings)) return null;
     const maxFret = isValidMaxFret(d.maxFret) ? d.maxFret : DEFAULT_MAX_FRET;
     return {
-        id: ACTIVE_TUNING_ID,
-        name: ACTIVE_TUNING_NAME,
+        id: SESSION_PREVIEW_TUNING_ID,
+        name: SESSION_PREVIEW_TUNING_NAME,
         strings: d.strings.slice(),
-        colors: Array.isArray(d.colors) ? d.colors.slice() : null,
-        roles: null,
         maxFret,
         ...resolveRetunerCapoOctaveFields(d, maxFret),
     };
@@ -344,30 +310,36 @@ export function isValidTuningStringsArray(strings) {
 
 // Resolves a note-spec array (length 4-8) into { midiTuning, labels } of
 // the same length. A malformed entry falls back per-index to
-// DEFAULT_TARGET_TUNING/EXTENDED_DEFAULT_TARGET_TUNING rather than
-// discarding the whole spec. A non-array/empty spec falls back to BEADG.
+// the default/extended reference chain rather than
+// discarding the whole spec. A non-array or an array outside the supported
+// 4-8 string boundary falls back wholesale to the real EADG default.
 export function resolveTargetTuning(spec) {
-    const src = (Array.isArray(spec) && spec.length > 0) ? spec : DEFAULT_TARGET_TUNING;
+    const validLength = Array.isArray(spec)
+        && spec.length >= MIN_TARGET_STRING_COUNT
+        && spec.length <= MAX_TARGET_STRING_COUNT;
+    const src = validLength ? spec : DEFAULT_TARGET_TUNING;
     const n = src.length;
+    // Four-string arrays recover against EADG. Wider arrays recover against
+    // BEADG plus its high extensions, preserving the established positional
+    // defaults without making BEADG an implicit whole-tuning fallback.
+    const fallback = n === MIN_TARGET_STRING_COUNT
+        ? DEFAULT_TARGET_TUNING
+        : EXTENDED_TARGET_TUNING.slice(BEADG_EXTENDED_INDEX, BEADG_EXTENDED_INDEX + n);
     const midiTuning = new Array(n);
     const labels = new Array(n);
     for (let i = 0; i < n; i += 1) {
-        const fallbackSpec = i < DEFAULT_TARGET_TUNING.length
-            ? DEFAULT_TARGET_TUNING[i]
-            : EXTENDED_DEFAULT_TARGET_TUNING[EXTENDED_CORE_INDEX + i];
-        const parsed = parseTargetNote(src[i]) || parseTargetNote(fallbackSpec) || parseTargetNote(DEFAULT_TARGET_TUNING[0]);
+        const parsed = parseTargetNote(src[i]) || parseTargetNote(fallback[i]) || parseTargetNote(DEFAULT_TARGET_TUNING[0]);
         midiTuning[i] = parsed.midi;
         labels[i] = parsed.label;
     }
     return { midiTuning, labels };
 }
 
-// BEADG-shaped engine fallback, used when a caller omits targetMidiTuning
-// entirely — independent of the user's chosen default preset
-// (DEFAULT_TUNING_ID, which is EADG, not BEADG). No caller in this
-// codebase actually omits it, so this exists purely as a deep safety net.
+// EADG-shaped engine fallback, matching the selected bass default when a
+// lower-level caller omits targetMidiTuning entirely.
 const DEFAULT_TARGET = resolveTargetTuning(DEFAULT_TARGET_TUNING);
 export const DEFAULT_TARGET_MIDI_TUNING = DEFAULT_TARGET.midiTuning;
+export const BEADG_TARGET_MIDI_TUNING = resolveTargetTuning(BEADG_TARGET_TUNING).midiTuning;
 
 // BEADG's own top string (G2) — the usual high-B extension point.
 const BEADG_TOP_STRING_MIDI = 43;

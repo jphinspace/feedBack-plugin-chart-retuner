@@ -2,14 +2,14 @@
 // application) — turning a base target tuning + capo into a capo'd
 // tuning + valid fret ceiling, and the end-to-end capo behaviors that
 // flow from it (capo cancellation identity, physical-fret display
-// shift). Imports the real engine from ../src/chart-retune.js — no
-// hand-synced duplicate. Run with `node test/target-capo.test.mjs`.
+// shift). Imports each exercised module directly so stage boundaries are
+// covered. Run with `node test/target-capo.test.mjs`.
 import test from 'node:test';
-import assert from 'node:assert';
-import { CR } from '../src/chart-retune.js';
+import assert from 'node:assert/strict';
+import { effectiveMaxFret, applyCapo } from '../src/target-capo.js';
+import { createRetuner } from '../src/retune-engine.js';
+import { CAPO_OUTPUT_MODES } from '../src/capo-output.js';
 import { makeBundle, EADG } from './helpers.mjs';
-
-const { effectiveMaxFret, applyCapo, createRetuner, CAPO_OUTPUT_MODES } = CR;
 
 // effectiveMaxFret / applyCapo: pure unit coverage.
 test('effectiveMaxFret / applyCapo', () => {
@@ -124,6 +124,31 @@ test('physical capo-output projection', () => {
     Object.assign(bundle, rawViews);
     retuner.apply(bundle, effective, relCeiling, 2.5);
     assert.deepStrictEqual(bundle.notes.map(n => n.f), [2, 0, 4]);
+});
+
+test('physical projection can be reapplied and switched without restoring raw arrays', () => {
+    const capo = 3;
+    const rawNote = { t: 0, s: 0, f: 5 };
+    const bundle = makeBundle({ notes: [rawNote], tuning: [0] });
+    const retuner = createRetuner();
+
+    retuner.apply(bundle, [43], 17, capo);
+    const firstPhysical = bundle.notes;
+    assert.deepStrictEqual(bundle.notes.map(n => n.f), [5]);
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
+
+    retuner.apply(bundle, [43], 17, capo);
+    assert.strictEqual(bundle.notes, firstPhysical);
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
+
+    retuner.apply(bundle, [43], 17, 0);
+    assert.deepStrictEqual(bundle.notes.map(n => n.f), [2]);
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
+
+    retuner.apply(bundle, [43], 17, capo);
+    assert.deepStrictEqual(bundle.notes.map(n => n.f), [5]);
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
+    assert.deepStrictEqual(firstPhysical.map(n => n.f), [5], 'earlier projection stays immutable');
 });
 
 // Physical projection: a plain note's sl/slu carry the -1 "no slide"

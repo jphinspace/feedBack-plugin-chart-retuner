@@ -3,10 +3,9 @@
 // chord-solver). Kept deliberately tiny: anything used by only one stage
 // belongs in that stage's own file, not here.
 
-// Engine fallback when a caller resolves no active tuning/maxFret at all.
-// Also the pre-guitar hardcoded ceiling every preset/custom tuning
-// defaulted to before per-tuning max fret existed.
-export const DEFAULT_MAX_FRET = 20;
+// Engine/profile fallback when a caller supplies no valid maxFret. Individual
+// presets can deliberately choose a shorter neck (standard EADG uses 20).
+export const DEFAULT_MAX_FRET = 24;
 
 // A comfortable single-position hand span, in frets. Stage 4 uses this
 // as reduceHandTravel's trigger; stage 5 uses the same value as its anchor

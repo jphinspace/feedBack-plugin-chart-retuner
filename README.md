@@ -52,12 +52,18 @@ pointing a guitar profile at a bass tuning, or vice versa:
 - **Mandolin (GGDDAAEE)**
 - **Your own saved custom profiles**
 
-Each saved tuning has its own per-string colors, set via a color picker
-when you create or edit it, shown in the tuning editor for reference —
-whether a renderer actually uses them depends on the renderer.
-
 Each tuning also has its own **max fret** (12, 14, 20, 21, 22, or 24), the
 highest fret a chart can remap onto.
+
+### Ad-hoc live preview
+
+Editing the tuning form immediately creates one **session-only live
+preview**. It temporarily overrides bass, rhythm, and lead together so you
+can try a physical instrument setup without changing or saving any profile.
+The preview is discarded when you select another tuning, press Cancel or
+Save, or restart the plugin. Saving is the only operation that creates or
+updates a custom profile; editing a built-in always saves as a new custom
+profile.
 
 ## Capo & octave offset
 

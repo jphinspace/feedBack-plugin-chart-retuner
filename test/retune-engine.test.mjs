@@ -1,57 +1,60 @@
 // Standalone Node verification for stage 4 (note/chord remap onto the
 // target tuning, consuming stage 3's octave-shifted source pitches and
-// stage 2's capo'd target via chord-solver). Imports the real engine from
-// ../src/chart-retune.js — no hand-synced duplicate. Run with `node
+// stage 2's capo'd target via chord-solver). Imports each dependency from
+// its defining module so the restructured boundaries are covered. Run with `node
 // test/retune-engine.test.mjs`.
 //
 // Stage 1 (target-tuning.test.mjs), stage 2 (target-capo.test.mjs),
 // stage 3 (source-tuning.test.mjs), and stage 5 (note-anchors.test.mjs)
-// live in their own files; string-colors.js's tests live in
-// string-colors.test.mjs.
+// live in their own files.
 import test from 'node:test';
-import assert from 'node:assert';
-import { CR } from '../src/chart-retune.js';
-import { songContext, SPOT_FRETS, EADG, EADGBE, makeBundle, bundleFromRaw, cloneChords, cloneAnchors } from './helpers.mjs';
-
-const {
+import assert from 'node:assert/strict';
+import {
+    BEADG_TARGET_MIDI_TUNING,
     DEFAULT_TARGET_MIDI_TUNING,
-    computeOpenStringMidiByString,
+    resolveTargetTuning,
+} from '../src/target-tuning.js';
+import { computeOpenStringMidiByString } from '../src/source-tuning.js';
+import { remapAnchors } from '../src/note-anchors.js';
+import {
     computeArrangementShift,
     resolveTargetForFret,
     remapNote,
     remapSlide,
     remapSlideCandidates,
     resolveChordCollisions,
-    remapAnchors,
     remapChordTemplate,
     reduceHandTravel,
     createRetuner,
-    resolveTargetTuning,
     MAX_SOLVER_GROUP_SIZE,
-} = CR;
+    HAND_JUMP_FRET_THRESHOLD,
+    HAND_JUMP_TIME_WINDOW_S,
+    HAND_JUMP_MIN_IMPROVEMENT,
+} from '../src/retune-engine.js';
+import { songContext, SPOT_FRETS, EADG, EADGBE, makeBundle, bundleFromRaw, cloneChords, cloneAnchors } from './helpers.mjs';
 
 // Drop-D, full chart. tuning = [-2,0,0,0], capo = 0.
 test('Drop-D arrangement shift and dropped-string cascade', (t) => {
-    const ctx = songContext(4, [-2, 0, 0, 0], 0);
+    const ctx = songContext(4, [-2, 0, 0, 0], 0, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(ctx.k, 1);
     for (const f of SPOT_FRETS) {
         t.test(`A string f=${f}`, () => {
-            assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[1], ctx.naturalTargetByString[1], f), { s: 2, f });
+            assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[1], ctx.naturalTargetByString[1], f, BEADG_TARGET_MIDI_TUNING), { s: 2, f });
         });
         t.test(`D string f=${f}`, () => {
-            assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[2], ctx.naturalTargetByString[2], f), { s: 3, f });
+            assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[2], ctx.naturalTargetByString[2], f, BEADG_TARGET_MIDI_TUNING), { s: 3, f });
         });
         t.test(`G string f=${f}`, () => {
-            assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[3], ctx.naturalTargetByString[3], f), { s: 4, f });
+            assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[3], ctx.naturalTargetByString[3], f, BEADG_TARGET_MIDI_TUNING), { s: 4, f });
         });
     }
     const midi0 = ctx.sourceOpenMidiByString[0], nat0 = ctx.naturalTargetByString[0];
-    assert.deepStrictEqual(remapNote(midi0, nat0, 0), { s: 0, f: 3 });
-    assert.deepStrictEqual(remapNote(midi0, nat0, 1), { s: 0, f: 4 });
-    assert.deepStrictEqual(remapNote(midi0, nat0, 2), { s: 1, f: 0 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 0, BEADG_TARGET_MIDI_TUNING), { s: 0, f: 3 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 1, BEADG_TARGET_MIDI_TUNING), { s: 0, f: 4 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 2, BEADG_TARGET_MIDI_TUNING), { s: 1, f: 0 });
     for (const f of [10, 20]) {
         t.test(`dropped string f=${f}`, () => {
-            assert.deepStrictEqual(remapNote(midi0, nat0, f), { s: 1, f: f - 2 });
+            assert.deepStrictEqual(remapNote(midi0, nat0, f, BEADG_TARGET_MIDI_TUNING), { s: 1, f: f - 2 });
         });
     }
 });
@@ -60,55 +63,55 @@ test('Drop-D arrangement shift and dropped-string cascade', (t) => {
 // Every string carries a nonzero adjustment, so every string cascades near
 // the bottom of its range before settling on its own natural target.
 test('Drop C# arrangement shift and per-string cascade', (t) => {
-    const ctx = songContext(4, [-3, -1, -1, -1], 0);
+    const ctx = songContext(4, [-3, -1, -1, -1], 0, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(ctx.k, 1);
 
     const [midi0, midi1, midi2, midi3] = ctx.sourceOpenMidiByString;
     const [nat0, nat1, nat2, nat3] = ctx.naturalTargetByString;
 
-    assert.deepStrictEqual(remapNote(midi0, nat0, 0), { s: 0, f: 2 });
-    assert.deepStrictEqual(remapNote(midi0, nat0, 1), { s: 0, f: 3 });
-    assert.deepStrictEqual(remapNote(midi0, nat0, 2), { s: 0, f: 4 });
-    assert.deepStrictEqual(remapNote(midi0, nat0, 3), { s: 1, f: 0 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 0, BEADG_TARGET_MIDI_TUNING), { s: 0, f: 2 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 1, BEADG_TARGET_MIDI_TUNING), { s: 0, f: 3 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 2, BEADG_TARGET_MIDI_TUNING), { s: 0, f: 4 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 3, BEADG_TARGET_MIDI_TUNING), { s: 1, f: 0 });
     for (const f of [10, 20]) {
         t.test(`string0 f=${f} stays on its natural (E) target`, () => {
-            assert.deepStrictEqual(remapNote(midi0, nat0, f), { s: 1, f: f - 3 });
+            assert.deepStrictEqual(remapNote(midi0, nat0, f, BEADG_TARGET_MIDI_TUNING), { s: 1, f: f - 3 });
         });
     }
 
-    assert.deepStrictEqual(remapNote(midi1, nat1, 0), { s: 1, f: 4 });
-    assert.deepStrictEqual(remapNote(midi1, nat1, 1), { s: 2, f: 0 });
+    assert.deepStrictEqual(remapNote(midi1, nat1, 0, BEADG_TARGET_MIDI_TUNING), { s: 1, f: 4 });
+    assert.deepStrictEqual(remapNote(midi1, nat1, 1, BEADG_TARGET_MIDI_TUNING), { s: 2, f: 0 });
     for (const f of [10, 20]) {
         t.test(`string1 f=${f} stays on its natural (A) target`, () => {
-            assert.deepStrictEqual(remapNote(midi1, nat1, f), { s: 2, f: f - 1 });
+            assert.deepStrictEqual(remapNote(midi1, nat1, f, BEADG_TARGET_MIDI_TUNING), { s: 2, f: f - 1 });
         });
     }
 
-    assert.deepStrictEqual(remapNote(midi2, nat2, 0), { s: 2, f: 4 });
-    assert.deepStrictEqual(remapNote(midi2, nat2, 1), { s: 3, f: 0 });
+    assert.deepStrictEqual(remapNote(midi2, nat2, 0, BEADG_TARGET_MIDI_TUNING), { s: 2, f: 4 });
+    assert.deepStrictEqual(remapNote(midi2, nat2, 1, BEADG_TARGET_MIDI_TUNING), { s: 3, f: 0 });
     for (const f of [10, 20]) {
         t.test(`string2 f=${f} stays on its natural (D) target`, () => {
-            assert.deepStrictEqual(remapNote(midi2, nat2, f), { s: 3, f: f - 1 });
+            assert.deepStrictEqual(remapNote(midi2, nat2, f, BEADG_TARGET_MIDI_TUNING), { s: 3, f: f - 1 });
         });
     }
 
-    assert.deepStrictEqual(remapNote(midi3, nat3, 0), { s: 3, f: 4 });
-    assert.deepStrictEqual(remapNote(midi3, nat3, 1), { s: 4, f: 0 });
+    assert.deepStrictEqual(remapNote(midi3, nat3, 0, BEADG_TARGET_MIDI_TUNING), { s: 3, f: 4 });
+    assert.deepStrictEqual(remapNote(midi3, nat3, 1, BEADG_TARGET_MIDI_TUNING), { s: 4, f: 0 });
     for (const f of [10, 20]) {
         t.test(`string3 f=${f} stays on its natural (G) target`, () => {
-            assert.deepStrictEqual(remapNote(midi3, nat3, f), { s: 4, f: f - 1 });
+            assert.deepStrictEqual(remapNote(midi3, nat3, f, BEADG_TARGET_MIDI_TUNING), { s: 4, f: f - 1 });
         });
     }
 });
 
-// EADG identity: every note shifts string index +1, fret unchanged.
-test('EADG identity', (t) => {
-    const ctx = songContext(4, [0, 0, 0, 0], 0);
+// EADG chart onto BEADG: every note shifts string index +1, fret unchanged.
+test('EADG onto explicit BEADG', (t) => {
+    const ctx = songContext(4, [0, 0, 0, 0], 0, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(ctx.k, 1);
     for (let s = 0; s < 4; s++) {
         for (const f of SPOT_FRETS) {
             t.test(`s=${s} f=${f}`, () => {
-                assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[s], ctx.naturalTargetByString[s], f), { s: s + 1, f });
+                assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[s], ctx.naturalTargetByString[s], f, BEADG_TARGET_MIDI_TUNING), { s: s + 1, f });
             });
         }
     }
@@ -116,12 +119,12 @@ test('EADG identity', (t) => {
 
 // BEAD identity: completely unchanged.
 test('BEAD identity', (t) => {
-    const ctx = songContext(4, [-5, -5, -5, -5], 0);
+    const ctx = songContext(4, [-5, -5, -5, -5], 0, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(ctx.k, 0);
     for (let s = 0; s < 4; s++) {
         for (const f of SPOT_FRETS) {
             t.test(`s=${s} f=${f}`, () => {
-                assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[s], ctx.naturalTargetByString[s], f), { s, f });
+                assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[s], ctx.naturalTargetByString[s], f, BEADG_TARGET_MIDI_TUNING), { s, f });
             });
         }
     }
@@ -129,12 +132,12 @@ test('BEAD identity', (t) => {
 
 // Already-BEADG identity.
 test('Already-BEADG identity', (t) => {
-    const ctx = songContext(5, [0, 0, 0, 0, 0], 0);
+    const ctx = songContext(5, [0, 0, 0, 0, 0], 0, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(ctx.k, 0);
     for (let s = 0; s < 5; s++) {
         for (const f of SPOT_FRETS) {
             t.test(`s=${s} f=${f}`, () => {
-                assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[s], ctx.naturalTargetByString[s], f), { s, f });
+                assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[s], ctx.naturalTargetByString[s], f, BEADG_TARGET_MIDI_TUNING), { s, f });
             });
         }
     }
@@ -143,18 +146,26 @@ test('Already-BEADG identity', (t) => {
 // Out-of-range drop.
 test('out-of-range notes drop', () => {
     assert.deepStrictEqual(remapNote(22, 0, 0), null);
-    assert.deepStrictEqual(remapNote(43, 4, 21), null);
+    assert.deepStrictEqual(remapNote(43, 4, 25), null);
+});
+
+test('omitted engine target defaults to EADG', () => {
+    assert.deepStrictEqual(DEFAULT_TARGET_MIDI_TUNING, [28, 33, 38, 43]);
+    const ctx = songContext(4, [0, 0, 0, 0], 0);
+    assert.deepStrictEqual(ctx.k, 0);
+    assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[0], ctx.naturalTargetByString[0], 0), { s: 0, f: 0 });
+    assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[3], ctx.naturalTargetByString[3], 20), { s: 3, f: 20 });
 });
 
 // Non-monotonic targets (banjo5_gdgbd puts the HIGH G4 drone at index 0):
 // the walk moves in PITCH order, not index order, so overflow reaches the
-// drone string, and the direction lock guarantees termination (review
+// next playable pitch-ranked string, and the direction lock guarantees termination (review
 // findings: wrongly-dropped notes on the banjo preset; a pre-existing
 // infinite loop when two pitch-adjacent strings sit >20 semitones apart).
 test('non-monotonic banjo5 target walks in pitch order', () => {
     const banjo5 = resolveTargetTuning(['G4', 'D3', 'G3', 'B3', 'D4']).midiTuning;
     assert.deepStrictEqual(banjo5, [67, 50, 55, 59, 62]);
-    assert.deepStrictEqual(resolveTargetForFret(75, 1, 8, banjo5), { s: 0, f: 16, adjustment: 8 });
+    assert.deepStrictEqual(resolveTargetForFret(75, 1, 8, banjo5), { s: 3, f: 24, adjustment: 16 });
 
     // Completeness sweep: a standard-guitar chart remapped onto banjo5
     // must always place a note that SOME banjo string could play, and
@@ -163,9 +174,9 @@ test('non-monotonic banjo5 target walks in pitch order', () => {
     const k = computeArrangementShift(6, [0, 0, 0, 0, 0, 0], 0, src, banjo5);
     let wronglyDropped = 0, pitchErrors = 0;
     for (let s = 0; s < 6; s++) {
-        for (let f = 0; f <= 20; f++) {
+        for (let f = 0; f <= 24; f++) {
             const r = remapNote(src[s], s + k, f, banjo5);
-            const fits = banjo5.some(open => { const tf = f + (src[s] - open); return tf >= 0 && tf <= 20; });
+            const fits = banjo5.some(open => { const tf = f + (src[s] - open); return tf >= 0 && tf <= 24; });
             if (fits && !r) wronglyDropped++;
             if (r && banjo5[r.s] + r.f !== src[s] + f) pitchErrors++;
         }
@@ -185,16 +196,16 @@ test('non-monotonic banjo5 target walks in pitch order', () => {
 // Slide notes.
 test('slide notes', () => {
     const midi = 28, natural = 1;
-    const lowToHigh = remapSlide(midi, natural, 18, 25);
+    const lowToHigh = remapSlide(midi, natural, 18, 25, BEADG_TARGET_MIDI_TUNING);
     // The natural string cannot fit fret 25. Move to the neighboring
     // higher string where both exact pitches fit instead of clamping 25.
     assert.deepStrictEqual(lowToHigh, { s: 2, f: 13, slideTo: 20 });
-    const highToLow = remapSlide(midi, natural, 25, 18);
+    const highToLow = remapSlide(midi, natural, 25, 18, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(highToLow, { s: 2, f: 20, slideTo: 13 });
-    assert.equal(DEFAULT_TARGET_MIDI_TUNING[lowToHigh.s] + lowToHigh.f, midi + 18);
-    assert.equal(DEFAULT_TARGET_MIDI_TUNING[lowToHigh.s] + lowToHigh.slideTo, midi + 25);
+    assert.equal(BEADG_TARGET_MIDI_TUNING[lowToHigh.s] + lowToHigh.f, midi + 18);
+    assert.equal(BEADG_TARGET_MIDI_TUNING[lowToHigh.s] + lowToHigh.slideTo, midi + 25);
 
-    const candidates = remapSlideCandidates(midi, natural, 18, 20);
+    const candidates = remapSlideCandidates(midi, natural, 18, 20, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(candidates.slice(0, 2), [
         { s: 1, f: 18, slideTo: 20 },
         { s: 2, f: 13, slideTo: 15 },
@@ -235,7 +246,9 @@ test('chord collision: lower pitch survives', () => {
     const noteA = { s: 0, f: 5 };
     const noteB = { s: 1, f: 2 };
     const noteC = { s: 2, f: 0 };
-    const survivors = resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, [noteA, noteB, noteC]);
+    const survivors = resolveChordCollisions(
+        sourceOpenMidiByString, naturalTargetByString, [noteA, noteB, noteC], BEADG_TARGET_MIDI_TUNING,
+    );
     const bySourceString = new Map(survivors.map(x => [x.note.s, x]));
 
     assert.deepStrictEqual(survivors.length, 2);
@@ -317,8 +330,41 @@ test('reduceHandTravel relocates a cross-string jump to an exact-pitch alternate
     reduceHandTravel(marginal, marginalTarget, 20);
     assert.deepStrictEqual(marginal.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 1 }, { s: 1, f: 8 }]);
 
-    assert.deepStrictEqual([CR.HAND_JUMP_FRET_THRESHOLD, CR.HAND_JUMP_TIME_WINDOW_S, CR.HAND_JUMP_MIN_IMPROVEMENT],
+    assert.deepStrictEqual([HAND_JUMP_FRET_THRESHOLD, HAND_JUMP_TIME_WINDOW_S, HAND_JUMP_MIN_IMPROVEMENT],
         [5, 0.75, 2]);
+});
+
+// Complexity regression: collision checks must use the live occupancy
+// index, not rescan the entire chart for every alternate-string candidate.
+// Count timestamp reads instead of asserting wall-clock time: this fails
+// deterministically for the old O(n^2) implementation without depending on
+// CI load or machine speed.
+test('reduceHandTravel remains bounded on a long standalone passage', () => {
+    let timestampReads = 0;
+    const notes = [];
+    const noteCount = 2000;
+    for (let i = 0; i < noteCount; i += 1) {
+        const timestamp = i * 0.1;
+        const note = {
+            s: i % 2,
+            f: i % 2 ? 15 : 1,
+            origNote: { s: i % 2, f: i % 2 ? 5 : 1 },
+        };
+        Object.defineProperty(note, 't', {
+            enumerable: true,
+            get() {
+                timestampReads += 1;
+                return timestamp;
+            },
+        });
+        notes.push(note);
+    }
+    reduceHandTravel(notes, [40, 45, 50, 55, 59, 64], 24);
+    assert.ok(
+        timestampReads < noteCount * 30,
+        `expected linear timestamp reads, got ${timestampReads} for ${noteCount} notes`,
+    );
+    assert.equal(notes.length, noteCount);
 });
 
 // reduceHandTravel's retune-attributable gate: notes carrying an
@@ -465,7 +511,7 @@ test('reduceHandTravel retune-attributable gate', () => {
 // across the full pipeline, from the pure-function level all the way
 // through the public API.
 test('createRetuner end-to-end retune-attributable gate', () => {
-    // The actual reported bug: an EADG bass chart on the default BEADG
+    // The actual reported bug: an EADG bass chart on an explicitly selected BEADG
     // target is a full identity remap (every note lands on its own exact
     // natural string/fret). A pre-existing cross-string jump already in
     // the source chart must survive completely untouched end to end --
@@ -477,7 +523,7 @@ test('createRetuner end-to-end retune-attributable gate', () => {
             anchors: [{ time: 0.0, fret: 6, width: 3 }],
             tuning: [0, 0, 0, 0],
         });
-        createRetuner().apply(bundle, DEFAULT_TARGET_MIDI_TUNING, 20, 0);
+        createRetuner().apply(bundle, BEADG_TARGET_MIDI_TUNING, 20, 0);
         assert.deepStrictEqual(bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 2, f: 6 }, { s: 1, f: 0 }]);
         assert.deepStrictEqual(bundle.anchors, [{ time: 0.0, fret: 6, width: 4 }]);
     }
@@ -543,7 +589,9 @@ test('collision resolution for simultaneous non-chord notes', () => {
     }
     const remapped = [];
     for (const bucket of byTime.values()) {
-        for (const { entry, note } of resolveChordCollisions(sourceOpenMidiByString, naturalTargetByString, bucket)) {
+        for (const { entry, note } of resolveChordCollisions(
+            sourceOpenMidiByString, naturalTargetByString, bucket, BEADG_TARGET_MIDI_TUNING,
+        )) {
             remapped.push({ t: note.t, s: entry.s, f: entry.f, origS: note.s });
         }
     }
@@ -563,9 +611,11 @@ test('collision resolution for simultaneous non-chord notes', () => {
 // End", Drop C# tuning, no real Chord objects, chord synthesized from a
 // hand-shape + this template's raw frets.
 test('chord template remapping (Drop C# real-world case)', () => {
-    const ctx = songContext(4, [-3, -1, -1, -1], 0);
+    const ctx = songContext(4, [-3, -1, -1, -1], 0, BEADG_TARGET_MIDI_TUNING);
     const template = { name: '', displayName: '', frets: [6, 7, -1, -1, -1, -1], fingers: [1, 2, -1, -1, -1, -1] };
-    const remapped = remapChordTemplate(ctx.sourceOpenMidiByString, ctx.naturalTargetByString, template);
+    const remapped = remapChordTemplate(
+        ctx.sourceOpenMidiByString, ctx.naturalTargetByString, template, BEADG_TARGET_MIDI_TUNING,
+    );
     assert.deepStrictEqual(remapped.frets, [-1, 3, 6, -1, -1]);
     assert.deepStrictEqual(remapped.fingers, [-1, 1, 2, -1, -1]);
     assert.deepStrictEqual({
@@ -573,7 +623,7 @@ test('chord template remapping (Drop C# real-world case)', () => {
     }, { name: '', displayName: '' });
 
     const midi0 = ctx.sourceOpenMidiByString[0], nat0 = ctx.naturalTargetByString[0];
-    assert.deepStrictEqual(remapNote(midi0, nat0, 6), { s: remapped.frets.indexOf(3), f: 3 });
+    assert.deepStrictEqual(remapNote(midi0, nat0, 6, BEADG_TARGET_MIDI_TUNING), { s: remapped.frets.indexOf(3), f: 3 });
 });
 
 // Collision within a single template.
@@ -581,7 +631,9 @@ test('collision within a single template', () => {
     const sourceOpenMidiByString = [33, 33, 38];
     const naturalTargetByString = [2, 2, 3];
     const template = { frets: [5, 2, 0, -1], fingers: null };
-    const remapped = remapChordTemplate(sourceOpenMidiByString, naturalTargetByString, template);
+    const remapped = remapChordTemplate(
+        sourceOpenMidiByString, naturalTargetByString, template, BEADG_TARGET_MIDI_TUNING,
+    );
     assert.deepStrictEqual(remapped.frets, [-1, -1, 2, 0, -1]);
     assert.deepStrictEqual(remapped.fingers, null);
 });
@@ -642,7 +694,7 @@ test('createRetuner cache invalidation on target tuning change', () => {
     const retuner = createRetuner();
     const rawNotes = [{ t: 0, s: 0, f: 0 }];
     const bundle = makeBundle({ notes: rawNotes, tuning: [0, 0, 0, 0, 0] });
-    retuner.apply(bundle);
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual({ s: bundle.notes[0].s, f: bundle.notes[0].f }, { s: 0, f: 0 });
     const beforeAeadg = bundle.notes[0];
 
@@ -657,8 +709,67 @@ test('createRetuner cache invalidation on target tuning change', () => {
     assert.notStrictEqual(bundle.notes[0], beforeAeadg, 'a target-tuning change must produce a fresh remap object');
 
     bundle.notes = rawNotes;
-    retuner.apply(bundle);
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(bundle.notes[0].f, 0);
+});
+
+test('createRetuner apply is idempotent on its own output and target switches use raw notes', () => {
+    const rawNote = { t: 0, s: 0, f: 5 };
+    const bundle = makeBundle({ notes: [rawNote], tuning: [5, 0, 0, 0] });
+    const retuner = createRetuner();
+
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING, 20);
+    const first = bundle.notes;
+    assert.deepStrictEqual(first.map(({ s, f }) => ({ s, f })), [{ s: 1, f: 10 }]);
+    assert.strictEqual(first[0].origNote, rawNote);
+
+    // No manual restoration of the raw arrays: apply must recognize the
+    // bundle fields it wrote on the previous call.
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING, 20);
+    assert.strictEqual(bundle.notes, first, 'same solve/projection reuses the cached output');
+    assert.strictEqual(bundle.notes[0].origNote, rawNote, 'origNote never becomes a nested transformed note');
+
+    const alternateTarget = [28, 33, 38, 43];
+    const expected = makeBundle({ notes: [rawNote], tuning: [5, 0, 0, 0] });
+    createRetuner().apply(expected, alternateTarget, 20);
+    retuner.apply(bundle, alternateTarget, 20);
+    assert.deepStrictEqual(
+        bundle.notes.map(({ s, f }) => ({ s, f })),
+        expected.notes.map(({ s, f }) => ({ s, f })),
+        'target change re-solves from the original chart rather than prior output',
+    );
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
+
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING, 20);
+    assert.deepStrictEqual(bundle.notes.map(({ s, f }) => ({ s, f })), [{ s: 1, f: 10 }]);
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
+});
+
+test('createRetuner invalidates its cache for in-place source mutations', () => {
+    const rawNote = { t: 0, s: 0, f: 0, sus: 1 };
+    const tuning = [0, 0, 0, 0];
+    const bundle = makeBundle({ notes: [rawNote], tuning });
+    const target = [28, 33, 38, 43];
+    const retuner = createRetuner();
+
+    retuner.apply(bundle, target, 20);
+    assert.deepStrictEqual({ f: bundle.notes[0].f, sus: bundle.notes[0].sus }, { f: 0, sus: 1 });
+
+    // Mutate the original object without replacing either the raw array or
+    // the transformed bundle field. Content, not reference identity, must
+    // invalidate the cached solve and refresh copied note metadata.
+    rawNote.f = 5;
+    rawNote.sus = 2;
+    retuner.apply(bundle, target, 20);
+    assert.deepStrictEqual({ f: bundle.notes[0].f, sus: bundle.notes[0].sus }, { f: 5, sus: 2 });
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
+
+    // Source tuning is host-owned and mutable too; changing one offset in
+    // place raises this note's exact target fret by one.
+    tuning[0] = 1;
+    retuner.apply(bundle, target, 20);
+    assert.deepStrictEqual(bundle.notes[0].f, 6);
+    assert.strictEqual(bundle.notes[0].origNote, rawNote);
 });
 
 // createRetuner's fail-safe: a malformed bundle (invalid stringCount, or a
@@ -684,6 +795,47 @@ test('createRetuner fail-safe passes a malformed bundle through unremapped', (t)
         createRetuner().apply(bundle, [40, 45, 50, 55]);
         assert.strictEqual(bundle.notes, rawNotes);
     });
+
+    for (const stringCount of [1.5, 9, 1000000]) {
+        t.test(`bounded stringCount=${stringCount}`, () => {
+            const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: [0], capo: 0, stringCount };
+            createRetuner().apply(bundle, [40], 20);
+            assert.strictEqual(bundle.notes, rawNotes);
+            assert.strictEqual(bundle.chords, rawChords);
+        });
+    }
+
+    t.test('stringCount/tuning length mismatch', () => {
+        const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: [0], capo: 0, stringCount: 4 };
+        createRetuner().apply(bundle, [40, 45, 50, 55], 20);
+        assert.strictEqual(bundle.notes, rawNotes);
+    });
+
+    t.test('non-integer tuning offset', () => {
+        const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: [0, 0, NaN, 0], capo: 0, stringCount: 4 };
+        createRetuner().apply(bundle, [40, 45, 50, 55], 20);
+        assert.strictEqual(bundle.notes, rawNotes);
+    });
+
+    t.test('sparse tuning array', () => {
+        const sparse = new Array(4);
+        sparse[0] = 0;
+        const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: sparse, capo: 0, stringCount: 4 };
+        createRetuner().apply(bundle, [40, 45, 50, 55], 20);
+        assert.strictEqual(bundle.notes, rawNotes);
+    });
+
+    t.test('invalid target pitch', () => {
+        const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: [0, 0, 0, 0], capo: 0, stringCount: 4 };
+        createRetuner().apply(bundle, [40, Infinity], 20);
+        assert.strictEqual(bundle.notes, rawNotes);
+    });
+
+    t.test('unbounded maxFret', () => {
+        const bundle = { notes: rawNotes, chords: rawChords, anchors: rawAnchors, chordTemplates: [], tuning: [0, 0, 0, 0], capo: 0, stringCount: 4 };
+        createRetuner().apply(bundle, [40, 45, 50, 55], Infinity);
+        assert.strictEqual(bundle.notes, rawNotes);
+    });
 });
 
 // A bundle with no chord templates at all (chordTemplates omitted/non-array)
@@ -701,7 +853,7 @@ test('switching tuning mid-playthrough re-adds a previously dropped note', () =>
     const rawNotes = [{ t: 0, s: 0, f: 0 }];
     const bundle = makeBundle({ notes: rawNotes, tuning: [-2, 0, 0, 0, 0] });
 
-    retuner.apply(bundle);
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(bundle.notes.length, 0);
 
     const aeadg = resolveTargetTuning(['A0', 'E1', 'A1', 'D2', 'G2']);
@@ -711,13 +863,13 @@ test('switching tuning mid-playthrough re-adds a previously dropped note', () =>
     assert.deepStrictEqual({ s: bundle.notes[0].s, f: bundle.notes[0].f }, { s: 0, f: 0 });
 
     bundle.notes = rawNotes;
-    retuner.apply(bundle);
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(bundle.notes.length, 0);
 });
 
 // maxFret: per-tuning-profile ceiling (HISTORY.md Phase 15 — replaces the old
 // blanket hardcoded 20). Every engine entry point defaults to
-// DEFAULT_MAX_FRET (20, exercised throughout this file already); these
+// DEFAULT_MAX_FRET (24); these
 // cases pin the actual widening/narrowing behavior a non-default value
 // produces.
 test('maxFret per-tuning-profile ceiling', () => {
@@ -725,14 +877,14 @@ test('maxFret per-tuning-profile ceiling', () => {
     // 0), so the target fret always equals the source fret — isolates the
     // ceiling check from any natural-string/adjustment interaction.
     const oneString = [40];
-    assert.deepStrictEqual(resolveTargetForFret(40, 0, 21, oneString), null);
-    assert.deepStrictEqual(resolveTargetForFret(40, 0, 21, oneString, 24), { s: 0, f: 21, adjustment: 0 });
+    assert.deepStrictEqual(resolveTargetForFret(40, 0, 21, oneString, 20), null);
+    assert.deepStrictEqual(resolveTargetForFret(40, 0, 21, oneString), { s: 0, f: 21, adjustment: 0 });
     assert.deepStrictEqual(resolveTargetForFret(40, 0, 15, oneString, 14), null);
 
     assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 23, width: 4 }], [{ t: 0, f: 0, origNote: { t: 0, f: 0 } }], 24),
         [{ time: 0, fret: 23, width: 4 }]);
     assert.deepStrictEqual(remapAnchors([{ time: 0, fret: 23, width: 4 }], [{ t: 0, f: 0, origNote: { t: 0, f: 0 } }]),
-        [{ time: 0, fret: 20, width: 4 }]);
+        [{ time: 0, fret: 23, width: 4 }]);
 
     // Single-string source/target (as above) so there's no adjacent string
     // the walk could escape to — isolates the ceiling from string choice.
@@ -784,10 +936,10 @@ test('irregular-interval target', (t) => {
         }
     }
     assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[4], ctx.naturalTargetByString[4], 0, irregular.midiTuning), { s: 4, f: 1 });
-    assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[4], ctx.naturalTargetByString[4], 19, irregular.midiTuning), { s: 4, f: 20 });
-    assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[4], ctx.naturalTargetByString[4], 20, irregular.midiTuning), null);
+    assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[4], ctx.naturalTargetByString[4], 23, irregular.midiTuning), { s: 4, f: 24 });
+    assert.deepStrictEqual(remapNote(ctx.sourceOpenMidiByString[4], ctx.naturalTargetByString[4], 24, irregular.midiTuning), null);
 
-    assert.deepStrictEqual(resolveTargetForFret(38, 3, 21, irregular.midiTuning), { s: 4, f: 17, adjustment: -4 });
+    assert.deepStrictEqual(resolveTargetForFret(38, 3, 25, irregular.midiTuning), { s: 4, f: 21, adjustment: -4 });
 });
 
 // Unplayable-low-note-drop regression: EADG target (4-string, B removed)
@@ -804,10 +956,6 @@ test('unplayable-low-note-drop regression on EADG target', () => {
     const rawNotes = [{ t: 0, s: 0, f: 0 }, { t: 1, s: 1, f: 0 }];
     const bundle = makeBundle({ notes: rawNotes, tuning: [0, 0, 0, 0, 0] });
     retuner.apply(bundle);
-    assert.deepStrictEqual(bundle.notes.length, 2);
-
-    bundle.notes = rawNotes;
-    retuner.apply(bundle, EADG.midiTuning);
     assert.deepStrictEqual(bundle.notes.map(n => ({ s: n.s, f: n.f })), [{ s: 0, f: 0 }]);
 });
 
@@ -829,7 +977,7 @@ test('6-string target (BEADG + a high string)', (t) => {
         }
     }
 
-    assert.deepStrictEqual(remapNote(sixString.midiTuning[5], 5, 21, sixString.midiTuning), null);
+    assert.deepStrictEqual(remapNote(sixString.midiTuning[5], 5, 25, sixString.midiTuning), null);
 });
 
 // remapChordTemplate at a non-5 target length.
@@ -890,7 +1038,7 @@ test('solver node-budget abort degrades to the per-note path', (t) => {
         ],
         chords: [], anchors: [], templates: [], tuning: [-1, -1, -1, -1], capo: 0, sc: 4,
     };
-    const eadg = DEFAULT_TARGET_MIDI_TUNING.slice(1); // E1 A1 D2 G2
+    const eadg = DEFAULT_TARGET_MIDI_TUNING; // E1 A1 D2 G2
 
     const capped = createRetuner({ maxSearchNodes: 10 });
     const cappedBundle = bundleFromRaw(raw);
@@ -937,7 +1085,7 @@ test('oversized simultaneous-note groups skip the solver', () => {
     const raw = { notes, chords: [], anchors: [], templates: [], tuning: [0, 0, 0, 0], capo: 0, sc: 4 };
     const retuner = createRetuner();
     const bundle = bundleFromRaw(raw);
-    retuner.apply(bundle);
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(retuner.getStats().oversizeGroups, 1);
     assert.ok(bundle.notes.length >= 1 && bundle.notes.length <= 5,
         'oversize group resolves via per-note collision path');
@@ -957,13 +1105,13 @@ test('whole-remap deadline disables the solver for remaining groups', (t) => {
     // between-groups check, so every group takes the per-note path.
     const retuner = createRetuner({ maxTotalSolveMs: -1 });
     const bundle = bundleFromRaw(raw);
-    retuner.apply(bundle);
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING);
     assert.deepStrictEqual(retuner.getStats().solverDisabled, true);
     assert.deepStrictEqual(bundle.notes.length, notes.length);
     assert.deepStrictEqual(Object.keys(retuner.getStats()).sort(),
         ['oversizeGroups', 'searchAborts', 'solverDisabled', 'workMs']);
-    // Identity chart on the default target: the per-note fallback maps
-    // EADG onto BEADG's top four strings — same frets, string + 1 — so
+    // Identity chart on the explicit BEADG target: the per-note fallback
+    // maps EADG onto BEADG's top four strings — same frets, string + 1 — so
     // the degraded output is still exactly right here.
     for (let i = 0; i < notes.length; i++) {
         t.test(`note i=${i}`, () => {

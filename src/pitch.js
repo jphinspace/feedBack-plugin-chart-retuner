@@ -1,5 +1,5 @@
 // Chart Retuner — note-name <-> MIDI pitch conversion.
-// One of four modules chart-retune.js aggregates into `CR`.
+// One of the pure-logic modules chart-retune.js aggregates into `CR`.
 
 const NOTE_LETTER_PITCH_CLASS = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
 

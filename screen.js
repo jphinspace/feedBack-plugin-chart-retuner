@@ -23,10 +23,8 @@ import { CR } from './src/chart-retune.js';
         } catch (_) { /* storage blocked */ }
         return undefined;
     }
-    // Persists without triggering _refresh()'s chart-transform 'refresh'
-    // dispatch — for writes that can't possibly change remap output (e.g.
-    // per-string display color), so a value that's purely cosmetic doesn't
-    // walk a host-side highway into a full re-clone + re-remap of the chart.
+    // Low-level persistence without a chart-transform refresh. Kept separate
+    // so _write can be the normal "persist and re-transform" path.
     function _writeSilent(key, val) {
         const s = String(val);
         _mem[key] = s;
@@ -83,34 +81,21 @@ import { CR } from './src/chart-retune.js';
         _write('tuningAdjustOverrides', JSON.stringify(map));
     }
 
-    // The unsaved "active" tuning the settings editor edits live; overlays every class while it exists.
-    function _readActiveTuning() {
-        const active = CR.parseActiveTuning(_read('activeTuning'));
-        if (!active) return null;
-        const gray = active.strings.map(() => CR.intToHex(CR.LIGHT_GRAY_COLOR));
-        active.colors = CR.resolveColorsArray(active.colors, active.strings.length, gray);
-        return active;
+    // Session-only, global live preview for ad-hoc editor changes. It
+    // intentionally overrides bass/rhythm/lead together while present: the
+    // editor is previewing one physical instrument, not modifying any saved
+    // arrangement profile. Its storage key is merely the bridge shared with
+    // settings.html; _clearSessionPreviewTuning below makes it ephemeral.
+    const SESSION_PREVIEW_STORAGE_KEY = 'sessionPreviewTuning';
+    const LEGACY_ACTIVE_TUNING_STORAGE_KEY = 'activeTuning';
+    function _readSessionPreviewTuning() {
+        return CR.parseSessionPreviewTuning(_read(SESSION_PREVIEW_STORAGE_KEY));
     }
-    // true when normalized's remap-relevant fields (everything but display
-    // color) match what's already stored — a pure color edit shouldn't pay
-    // for a chart-transform refresh, since _transform() never reads color.
-    function _onlyColorsChanged(normalized) {
-        const prev = _readActiveTuning();
-        if (!prev) return false;
-        return prev.maxFret === normalized.maxFret
-            && prev.capo === normalized.capo
-            && prev.capoEnabled === normalized.capoEnabled
-            && prev.octaveOffset === normalized.octaveOffset
-            && prev.strings.length === normalized.strings.length
-            && prev.strings.every((s, i) => s === normalized.strings[i]);
-    }
-    function _writeActiveTuning(d) {
-        const normalized = CR.parseActiveTuning(d);
+    function _writeSessionPreviewTuning(d) {
+        const normalized = CR.parseSessionPreviewTuning(d);
         if (!normalized) return false;
-        const writeFn = _onlyColorsChanged(normalized) ? _writeSilent : _write;
-        writeFn('activeTuning', JSON.stringify({
+        _write(SESSION_PREVIEW_STORAGE_KEY, JSON.stringify({
             strings: normalized.strings,
-            colors: normalized.colors,
             maxFret: normalized.maxFret,
             capo: normalized.capo,
             capoEnabled: normalized.capoEnabled,
@@ -118,43 +103,47 @@ import { CR } from './src/chart-retune.js';
         }));
         return true;
     }
-    function _clearActiveTuning() {
-        if (_read('activeTuning')) _write('activeTuning', '');
+    function _clearSessionPreviewTuning() {
+        let changed = false;
+        for (const key of [SESSION_PREVIEW_STORAGE_KEY, LEGACY_ACTIVE_TUNING_STORAGE_KEY]) {
+            if (!_read(key)) continue;
+            _writeSilent(key, '');
+            changed = true;
+        }
+        if (changed) _refresh();
     }
-    // Startup: an unsaved active tuning left over from a previous session
-    // (forgotten edits never saved or reselected away from) would otherwise
-    // keep silently overriding every arrangement class's playback forever.
-    _clearActiveTuning();
+    // Intentional session boundary: an ad-hoc preview never survives plugin
+    // startup and can never silently become a fourth persistent profile.
+    _clearSessionPreviewTuning();
 
-    // Resolves a class's tuning: active-tuning overlay, else the profile with any quick-adjust override applied.
-    function _resolveActiveTuning(arrClass) {
-        const active = _readActiveTuning();
-        if (active) return active;
-        const t = CR.resolveActiveTuning(_read(_profileKeyFor(arrClass)), _readCustomTunings(), arrClass);
+    // A session preview wins globally; otherwise resolve the selected profile
+    // for this arrangement class and apply that tuning's quick adjustments.
+    function _resolveTuningForArrangement(arrClass) {
+        const preview = _readSessionPreviewTuning();
+        if (preview) return preview;
+        const t = CR.resolveSelectedTuningProfile(_read(_profileKeyFor(arrClass)), _readCustomTunings(), arrClass);
         return CR.applyRetunerCapoOctaveOverride(t, _readTuningAdjustOverrides()[t.id]);
     }
 
     // Bridge for settings.html (dynamic-imports src/chart-retune.js directly; falls back to
     // raw localStorage writes if this script hasn't registered these yet).
-    window.cr3dSetActiveTuning = (arrClass, id) => {
-        _clearActiveTuning();
+    window.cr3dSelectTuningProfile = (arrClass, id) => {
+        _clearSessionPreviewTuning();
         _write(_profileKeyFor(arrClass), String(id || CR.defaultTuningIdForClass(arrClass)));
     };
-    window.cr3dWriteActiveTuning = (d) => _writeActiveTuning(d);
-    window.cr3dClearActiveTuning = () => _clearActiveTuning();
+    window.cr3dWriteSessionPreviewTuning = (d) => _writeSessionPreviewTuning(d);
+    window.cr3dClearSessionPreviewTuning = () => _clearSessionPreviewTuning();
     window.cr3dSaveCustomTuning = (profile) => {
         if (!profile || typeof profile.name !== 'string' || !profile.name.trim()) return null;
         if (!CR.isValidTuningStringsArray(profile.strings)) return null;
         const n = profile.strings.length;
-        const grayDefaults = profile.strings.map(() => CR.intToHex(CR.LIGHT_GRAY_COLOR));
-        const colors = CR.resolveColorsArray(profile.colors, n, grayDefaults);
         const maxFret = CR.isValidMaxFret(profile.maxFret) ? profile.maxFret : CR.DEFAULT_MAX_FRET;
         const { capo, capoEnabled, octaveOffset } = CR.resolveRetunerCapoOctaveFields(profile, maxFret);
         const list = _readCustomTunings();
         const id = (typeof profile.id === 'string' && profile.id)
             ? profile.id
             : 'custom_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        const entry = { id, name: profile.name.trim(), strings: profile.strings.slice(0, n), colors, maxFret, capo, capoEnabled, octaveOffset };
+        const entry = { id, name: profile.name.trim(), strings: profile.strings.slice(0, n), maxFret, capo, capoEnabled, octaveOffset };
         const idx = list.findIndex(p => p.id === id);
         if (idx >= 0) list[idx] = entry; else list.push(entry);
         _writeCustomTunings(list);
@@ -164,7 +153,7 @@ import { CR } from './src/chart-retune.js';
             delete overrides[id];
             _write('tuningAdjustOverrides', JSON.stringify(overrides));
         }
-        _clearActiveTuning();
+        _clearSessionPreviewTuning();
         return id;
     };
     window.cr3dDeleteCustomTuning = (id) => {
@@ -175,7 +164,7 @@ import { CR } from './src/chart-retune.js';
             _write('tuningAdjustOverrides', JSON.stringify(overrides));
         }
         for (const cls of _PROFILE_CLASSES) {
-            if (_read(_profileKeyFor(cls)) === id) window.cr3dSetActiveTuning(cls, null);
+            if (_read(_profileKeyFor(cls)) === id) window.cr3dSelectTuningProfile(cls, null);
         }
     };
 
@@ -224,20 +213,20 @@ import { CR } from './src/chart-retune.js';
         // the "new song" refresh case).
         if (!_crRoot || !_crRoot.isConnected) _crMountAdjustControls();
 
-        const active = _resolveActiveTuning(arrClass);
-        const target = CR.resolveTargetTuning(active.strings); // stage 1
+        const resolvedTuning = _resolveTuningForArrangement(arrClass);
+        const target = CR.resolveTargetTuning(resolvedTuning.strings); // stage 1
         // This plugin's own capo, distinct from the chart's native one
         // (sourceCapo below). The solver uses it as a floor/ceiling
         // constraint; the final capo-output projection decides whether the
         // returned fret is relative or the current host's physical workaround.
-        const retunerCapo = active.capoEnabled ? active.capo : 0;
-        const { midiTuning: remapMidiTuning, maxFret } = CR.applyCapo(target.midiTuning, active.maxFret, retunerCapo); // stage 2
+        const retunerCapo = resolvedTuning.capoEnabled ? resolvedTuning.capo : 0;
+        const { midiTuning: remapMidiTuning, maxFret } = CR.applyCapo(target.midiTuning, resolvedTuning.maxFret, retunerCapo); // stage 2
 
         const filtered = _applyRetune(_crFilteredRetuner, input.notes, input.chords, input.anchors, input.chordTemplates,
-            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo, active.octaveOffset);
+            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo, resolvedTuning.octaveOffset);
         const sameSet = input.allNotes === input.notes && input.allChords === input.chords;
         const all = sameSet ? filtered : _applyRetune(_crAllRetuner, input.allNotes, input.allChords, null, input.chordTemplates,
-            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo, active.octaveOffset);
+            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo, resolvedTuning.octaveOffset);
 
         const n = target.midiTuning.length;
         const isBass = /\bbass\b/i.test(songInfo.arrangement || '');
@@ -303,7 +292,7 @@ import { CR } from './src/chart-retune.js';
         });
     }
     function _crProfileName(t) {
-        if (t.id === CR.ACTIVE_TUNING_ID) return CR.ACTIVE_TUNING_NAME + ' (unsaved)';
+        if (t.id === CR.SESSION_PREVIEW_TUNING_ID) return CR.SESSION_PREVIEW_TUNING_NAME;
         const preset = CR.BUILTIN_PRESET_TUNINGS.find(p => p.id === t.id);
         if (preset) return preset.label;
         const custom = _readCustomTunings().find(p => p.id === t.id);
@@ -341,7 +330,7 @@ import { CR } from './src/chart-retune.js';
             active ? 'Retuning active — click to play the original tuning.' : 'Off — click to retune this chart.');
         _crEls.detailsWrap.style.display = active ? '' : 'none';
         if (!active) return;
-        const t = _resolveActiveTuning(_crCurrentArrClass());
+        const t = _resolveTuningForArrangement(_crCurrentArrClass());
         _crPaintPill(_crPills.capo, t.capoEnabled, false,
             (t.capoEnabled ? 'Capo fret ' + t.capo : 'Off') + ' on ' + _crProfileName(t) + ' — click to toggle.');
         _crEls.fretRow.style.display = t.capoEnabled ? '' : 'none';
@@ -351,21 +340,21 @@ import { CR } from './src/chart-retune.js';
         _crEls.octSlider.value = String(t.octaveOffset);
         _crEls.octVal.textContent = (t.octaveOffset > 0 ? '+' : '') + t.octaveOffset;
     }
-    // Persists a retuner-capo/octave change: the unsaved active tuning
-    // writes through _writeActiveTuning, a saved profile via its override.
+    // Persists a retuner-capo/octave change: a session preview updates that
+    // preview, while a saved profile uses its per-tuning override.
     function _writeRetunerCapoOctave(t, retunerCapo, retunerCapoEnabled, octaveOffset) {
-        if (t.id === CR.ACTIVE_TUNING_ID) {
-            _writeActiveTuning({ strings: t.strings, colors: t.colors, maxFret: t.maxFret, capo: retunerCapo, capoEnabled: retunerCapoEnabled, octaveOffset });
+        if (t.id === CR.SESSION_PREVIEW_TUNING_ID) {
+            _writeSessionPreviewTuning({ strings: t.strings, maxFret: t.maxFret, capo: retunerCapo, capoEnabled: retunerCapoEnabled, octaveOffset });
             return;
         }
         _writeTuningAdjustOverride(t.id, retunerCapo, retunerCapoEnabled, octaveOffset);
     }
     function _crToggleCapo() {
-        const t = _resolveActiveTuning(_crCurrentArrClass());
+        const t = _resolveTuningForArrangement(_crCurrentArrClass());
         _writeRetunerCapoOctave(t, t.capo, !t.capoEnabled, t.octaveOffset);
     }
     function _crAdjCommit() {
-        const t = _resolveActiveTuning(_crCurrentArrClass());
+        const t = _resolveTuningForArrangement(_crCurrentArrClass());
         const retunerCapo = Math.max(0, Math.min(t.maxFret - 1, parseInt(_crEls.fretSlider.value, 10) || 0));
         const octaveOffset = Math.max(CR.MIN_OCTAVE_OFFSET, Math.min(CR.MAX_OCTAVE_OFFSET, parseInt(_crEls.octSlider.value, 10) || 0));
         _writeRetunerCapoOctave(t, retunerCapo, t.capoEnabled, octaveOffset);

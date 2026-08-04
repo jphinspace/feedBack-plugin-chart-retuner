@@ -1,14 +1,19 @@
 // Standalone Node verification for stage 5 (hand-position anchor remap).
 // Consumes stage 4's already-remapped notes/chords as plain input —
 // doesn't touch tuning/capo/octave/solver internals directly. Imports the
-// real engine from ../src/chart-retune.js — no hand-synced duplicate. Run
-// with `node test/note-anchors.test.mjs`.
+// the modules directly so their boundaries remain independently testable.
+// Run with `node test/note-anchors.test.mjs`.
 import test from 'node:test';
-import assert from 'node:assert';
-import { CR } from '../src/chart-retune.js';
+import assert from 'node:assert/strict';
+import { DEFAULT_MAX_FRET } from '../src/common.js';
+import { remapAnchors, ANCHOR_DONOR_WINDOW_S } from '../src/note-anchors.js';
+import { createRetuner } from '../src/retune-engine.js';
+import {
+    DEFAULT_TARGET_MIDI_TUNING,
+    resolveTargetTuning,
+    BUILTIN_PRESET_TUNINGS,
+} from '../src/target-tuning.js';
 import { makeBundle, bundleFromRaw, cloneChords, cloneAnchors, EADGBE } from './helpers.mjs';
-
-const { DEFAULT_MAX_FRET, DEFAULT_TARGET_MIDI_TUNING, remapAnchors, ANCHOR_DONOR_WINDOW_S, createRetuner, resolveTargetTuning, BUILTIN_PRESET_TUNINGS } = CR;
 
 // Anchor remapping. Open-string notes are excluded as donors.
 test('anchor remapping excludes open-string donors', () => {
@@ -256,7 +261,7 @@ test('remapAnchors prefers a nearby exact donor over a revoiced one', () => {
 // notes are tagged, and the anchor skips past them to the exact single
 // note that follows.
 test('createRetuner end-to-end: revoiced bucket notes and anchor donor fallback', () => {
-    const eadg = DEFAULT_TARGET_MIDI_TUNING.slice(1); // E1 A1 D2 G2
+    const eadg = DEFAULT_TARGET_MIDI_TUNING; // E1 A1 D2 G2
     const mkRaw = (singleT) => ({
         // tuning [-3,-3,0,0]: s0 open C#1(25), s1 open F#1(30).
         // Bucket t=0: (s0,f1)=D1(26) — below EADG, exact remap drops it ->

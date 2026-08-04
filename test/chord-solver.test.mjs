@@ -1,12 +1,10 @@
 // Standalone Node verification for the chord-aware remapping solver
-// (src/chord-solver.js) plus its createRetuner() integration. Imports
-// the real modules from ../src/chart-retune.js — no hand-synced
-// duplicate. Run with `node test/chord-solver.test.mjs`.
+// (src/chord-solver.js) plus its createRetuner() integration. Imports each
+// definition directly so module boundaries remain independently testable.
+// Run with `node test/chord-solver.test.mjs`.
 import test from 'node:test';
-import assert from 'node:assert';
-import { CR } from '../src/chart-retune.js';
-
-const {
+import assert from 'node:assert/strict';
+import {
     MAX_CHORD_SPAN,
     parseChordRootFromName,
     fingersNeeded,
@@ -19,8 +17,15 @@ const {
     matchVoicingToSource,
     solveChord,
     computeChordFingers,
-    pitchClassOf,
-} = CR;
+    MAX_SEARCH_NODES,
+} from '../src/chord-solver.js';
+import { pitchClassOf } from '../src/pitch.js';
+import { createRetuner } from '../src/retune-engine.js';
+import {
+    BEADG_TARGET_MIDI_TUNING,
+    resolveTargetTuning,
+} from '../src/target-tuning.js';
+import { CAPO_OUTPUT_MODES } from '../src/capo-output.js';
 
 // Common tunings (open MIDI, low string first).
 const E_STD = [40, 45, 50, 55, 59, 64];        // E2 A2 D3 G3 B3 E4
@@ -269,8 +274,8 @@ test('matchVoicingToSource: exact matches first, then same-pc nearest', () => {
 
 /* ── createRetuner() integration — the same path screen.js's draw() uses ── */
 
-const EADGBE_TARGET = CR.resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']).midiTuning;
-const DROP_D_TARGET = CR.resolveTargetTuning(['D2', 'A2', 'D3', 'G3', 'B3', 'E4']).midiTuning;
+const EADGBE_TARGET = resolveTargetTuning(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']).midiTuning;
+const DROP_D_TARGET = resolveTargetTuning(['D2', 'A2', 'D3', 'G3', 'B3', 'E4']).midiTuning;
 
 // Bundle factory: a 6-string guitar chart. `tuning` is per-string offsets
 // from standard, notes/chords/templates as feedBack supplies them.
@@ -286,7 +291,7 @@ const sf = ns => ns.map(({ s, f }) => ({ s, f })).sort((a, b) => a.s - b.s);
 // chord byte-identically (the exact candidate), template included,
 // fingers carried.
 test('createRetuner: E-standard chart on EADGBE target is the identity', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const tmpl = { name: 'C', frets: [-1, 3, 2, 0, 1, 0], fingers: [-1, 3, 2, 0, 1, 0] };
     const chord = { t: 1, id: 0, notes: v([[1, 3], [2, 2], [3, 0], [4, 1], [5, 0]]) };
     const bundle = guitarBundle({ chords: [chord], templates: [tmpl] });
@@ -303,7 +308,7 @@ test('createRetuner: E-standard chart on EADGBE target is the identity', () => {
 // maps the low string +2 and the rest unchanged (222100); the carried
 // finger 0 on a now-fretted string is invalid, so fingers are re-derived.
 test('createRetuner: E-standard open E onto Drop-D target', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const tmpl = { name: 'E', frets: [0, 2, 2, 1, 0, 0], fingers: [0, 2, 3, 1, 0, 0] };
     const chord = { t: 0, id: 0, notes: v([[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]) };
     const bundle = guitarBundle({ chords: [chord], templates: [tmpl] });
@@ -315,7 +320,7 @@ test('createRetuner: E-standard open E onto Drop-D target', () => {
 
 // Capo-2 D major (source span-1); exact reproduction needs span-3, so it revoices to span-1.
 test('createRetuner: capo-2 chart with open strings onto E-standard', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const tmpl = { name: 'D', frets: [-1, 5, 4, 0, 3, 0], fingers: [-1, 3, 2, 0, 1, 0] };
     const chord = { t: 0, id: 0, notes: v([[1, 5], [2, 4], [3, 0], [4, 3], [5, 0]]) };
     const bundle = guitarBundle({ capo: 2, chords: [chord], templates: [tmpl] });
@@ -335,7 +340,7 @@ test('createRetuner: capo-2 chart with open strings onto E-standard', () => {
 
 // Regression (Oasis "Wonderwall"): capo-2 F#m7 mixing open/fretted notes must stay valid F#m7.
 test('createRetuner: Wonderwall-style capo-2 F#m7 with mixed open/fretted notes', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const tmpl = { name: 'F#m7', frets: [0, 4, 4, 0, 5, 5], fingers: [-1, 1, 2, -1, 3, 4] };
     const chord = { t: 12.776, id: 0, notes: v([[0, 0], [1, 4], [2, 4], [3, 0], [4, 5], [5, 5]]) };
     const bundle = guitarBundle({ capo: 2, chords: [chord], templates: [tmpl] });
@@ -356,7 +361,7 @@ test('createRetuner: Wonderwall-style capo-2 F#m7 with mixed open/fretted notes'
 // Eb-standard chart on E-standard: root stays in bass (x-x-1-3-4-3). The
 // 2-note subset (both fretted, no open note) doesn't get registerFlexible.
 test('createRetuner: Eb-standard chart on E-standard target', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const tmpl = { name: 'Eb', frets: [0, 2, 2, 1, 0, 0], fingers: [0, 2, 3, 1, 0, 0] };
     const full = { t: 0, id: 0, notes: v([[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]) };
     // A difficulty-filtered subset instance (source strings 1+2 only) —
@@ -375,7 +380,7 @@ test('createRetuner: Eb-standard chart on E-standard target', () => {
 // E-standard target: the below-range D2 drops, but the open D string
 // keeps the root in the bass instead of fretting the A string up to it.
 test('createRetuner: Drop-D flat-note D5 bucket onto E-standard', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const rawNotes = [{ t: 0, s: 0, f: 0 }, { t: 0, s: 1, f: 0 }, { t: 0, s: 2, f: 0 }, { t: 1, s: 2, f: 5 }];
     const bundle = guitarBundle({ tuning: [-2, 0, 0, 0, 0, 0], notes: rawNotes });
     retuner.apply(bundle, E_STD);
@@ -388,7 +393,7 @@ test('createRetuner: Drop-D flat-note D5 bucket onto E-standard', () => {
 
 test('createRetuner: chord slide on a revoiced chord', () => {
     // Eb-standard 2-note power chord with a +2 slide on both notes.
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const chord = { t: 0, id: 0, notes: [{ s: 1, f: 1, sl: 3 }, { s: 2, f: 3, sl: 5 }] };
     const tmpl = { name: 'Bb5', frets: [-1, 1, 3, -1, -1, -1], fingers: [-1, 1, 3, -1, -1, -1] };
     const bundle = guitarBundle({ tuning: [-1, -1, -1, -1, -1, -1], chords: [chord], templates: [tmpl] });
@@ -409,8 +414,8 @@ test('createRetuner: chart-capo slide pins both sounding pitches during chord re
         capo: 2,
         notes: [slide, collision],
     });
-    CR.createRetuner({
-        capoOutputMode: CR.CAPO_OUTPUT_MODES.CHART_TRANSFORM_CONTRACT,
+    createRetuner({
+        capoOutputMode: CAPO_OUTPUT_MODES.CHART_TRANSFORM_CONTRACT,
     }).apply(bundle, E_STD);
 
     const remappedSlide = bundle.notes.find(note => note.origNote === slide);
@@ -429,7 +434,7 @@ test('createRetuner: a pinned exact slide wins a one-string collision', () => {
     const otherTone = { t: 0, s: 1, f: 0 };
     const bundle = guitarBundle({ notes: [slide, otherTone] });
 
-    CR.createRetuner().apply(bundle, [40]);
+    createRetuner().apply(bundle, [40]);
 
     assert.deepStrictEqual(bundle.notes.map(note => note.origNote), [slide]);
     assert.deepStrictEqual(
@@ -443,7 +448,7 @@ test('createRetuner: an impossible exact slide is dropped, not shortened', () =>
     const playableTone = { t: 0, s: 1, f: 0 };
     const bundle = guitarBundle({ notes: [impossibleSlide, playableTone] });
 
-    CR.createRetuner().apply(bundle, E_STD, 20);
+    createRetuner().apply(bundle, E_STD, 20);
 
     assert.equal(bundle.notes.some(note => note.origNote === impossibleSlide), false);
     assert.equal(bundle.notes.some(note => note.origNote === playableTone), true);
@@ -451,17 +456,17 @@ test('createRetuner: an impossible exact slide is dropped, not shortened', () =>
 });
 
 // Bass regression through apply(): a clean simultaneous pair on the
-// default BEADG target behaves exactly as the pre-solver engine (the
+// An explicitly selected BEADG target behaves exactly as the pre-solver engine (the
 // exact candidate == the per-note remap), keeping techniques and
 // origNote wiring.
-test('createRetuner: bass regression, clean pair on default BEADG', () => {
-    const retuner = CR.createRetuner();
+test('createRetuner: bass regression, clean pair on explicit BEADG', () => {
+    const retuner = createRetuner();
     const rawNotes = [{ t: 0, s: 1, f: 2, sus: 0.5 }, { t: 0, s: 2, f: 0 }];
     const bundle = {
         notes: rawNotes, chords: [], anchors: [], chordTemplates: [],
         tuning: [0, 0, 0, 0], capo: 0, stringCount: 4,
     };
-    retuner.apply(bundle); // default BEADG-shaped target, k = +1
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING); // EADG chart onto BEADG, k = +1
     assert.deepStrictEqual(sf(bundle.notes), v([[2, 2], [3, 0]]));
     assert.deepStrictEqual(bundle.notes.find(n => n.s === 2).sus, 0.5);
     assert.ok(bundle.notes.every(n => rawNotes.includes(n.origNote)), 'bass double-stop: origNote wired');
@@ -473,14 +478,14 @@ test('createRetuner: bass regression, clean pair on default BEADG', () => {
 // strings share open MIDI 33 (tuning [+5,0,0,0]); f5 on string 0 and
 // f2 on string 1 both used to fight for one slot, dropping one.
 test('createRetuner: bass improvement pin, colliding notes revoice', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const rawNotes = [{ t: 0, s: 0, f: 5 }, { t: 0, s: 1, f: 2 }];
     const bundle = {
         notes: rawNotes, chords: [], anchors: [], chordTemplates: [],
         tuning: [5, 0, 0, 0], capo: 0, stringCount: 4,
     };
-    retuner.apply(bundle); // default BEADG-shaped target
-    const target = CR.DEFAULT_TARGET_MIDI_TUNING;
+    retuner.apply(bundle, BEADG_TARGET_MIDI_TUNING);
+    const target = BEADG_TARGET_MIDI_TUNING;
     const pitches = bundle.notes.map(n => target[n.s] + n.f).sort((a, b) => a - b);
     assert.deepStrictEqual(pitches, [35, 38]);
     assert.deepStrictEqual(new Set(bundle.notes.map(n => n.s)).size, bundle.notes.length);
@@ -490,7 +495,7 @@ test('createRetuner: bass improvement pin, colliding notes revoice', () => {
 // content degrades gracefully per chord, the pipeline stays stable
 // throughout, and single notes below range still drop.
 test('createRetuner: 7-string GP source onto 6-string EADGBE target', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const chord = { t: 0, id: 0, notes: v([[0, 0], [1, 0], [2, 0]]) }; // B1 E2 A2
     const tmpl = { name: null, frets: [0, 0, 0, -1, -1, -1, -1], fingers: [-1, -1, -1, -1, -1, -1, -1] };
     const bundle = {
@@ -508,7 +513,7 @@ test('createRetuner: 7-string GP source onto 6-string EADGBE target', () => {
 // Mid-run target switch re-solves chords from the RAW chart (cache
 // invalidation), mirroring the live tuning-switch contract for notes.
 test('createRetuner: mid-run target switch re-solves from the raw chart', () => {
-    const retuner = CR.createRetuner();
+    const retuner = createRetuner();
     const tmpl = { name: 'E', frets: [0, 2, 2, 1, 0, 0], fingers: [0, 2, 3, 1, 0, 0] };
     const rawChords = [{ t: 0, id: 0, notes: v([[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]) }];
     const bundle = guitarBundle({ chords: rawChords, templates: [tmpl] });
@@ -530,7 +535,7 @@ test('createRetuner: null chord id does not alias template index 0', () => {
     const solveWithId = id => {
         const chord = { t: 0, id, notes: v([[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]) };
         const b = guitarBundle({ chords: [chord], templates: [tmpl0] });
-        CR.createRetuner().apply(b, DROP_D_TARGET);
+        createRetuner().apply(b, DROP_D_TARGET);
         return sf(b.chords[0].notes);
     };
     assert.deepStrictEqual(solveWithId(null), solveWithId(999));
@@ -544,7 +549,7 @@ test('createRetuner: duplicate source strings dedup to one note per string', () 
     const tmpl = { name: 'X', frets: [0, 2, 2, 1, 0, 0], fingers: [-1, -1, -1, -1, -1, -1] };
     const dup = { t: 0, id: 0, notes: v([[1, 2], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0], [0, 0]]) };
     const b = guitarBundle({ chords: [dup], templates: [tmpl] });
-    CR.createRetuner().apply(b, E_STD);
+    createRetuner().apply(b, E_STD);
     const strings = b.chords[0].notes.map(n => n.s);
     assert.deepStrictEqual(b.chords[0].notes.length, 6);
     assert.deepStrictEqual(new Set(strings).size, strings.length);
@@ -560,7 +565,7 @@ test('createRetuner: sliding chords skip the template-first shortcut', () => {
     const chord = { t: 0, id: 0, notes: [{ s: 1, f: 15, slu: 0 }, { s: 3, f: 0 }] };
     const target = [40, 35, 62, 55, 59, 64];
     const b = guitarBundle({ chords: [chord], templates: [tmpl] });
-    CR.createRetuner().apply(b, target);
+    createRetuner().apply(b, target);
     assert.deepStrictEqual(b.chords[0].notes.map(({ s, f, slu }) => ({ s, f, slu })).sort((a, b2) => a.s - b2.s),
         [{ s: 0, f: 20, slu: 5 }, { s: 3, f: 0, slu: undefined }]);
     assert.equal(target[0] + 20, E_STD[1] + 15);
@@ -585,7 +590,7 @@ test('solveChord: degenerate 20-fret source span still solves', () => {
 test('createRetuner: template with omitted finger data stays omitted', () => {
     const tmpl = { name: 'X', frets: [0, 2, 2, 1, 0, 0] };
     const b = guitarBundle({ templates: [tmpl] });
-    CR.createRetuner().apply(b, EADGBE_TARGET);
+    createRetuner().apply(b, EADGBE_TARGET);
     assert.deepStrictEqual(b.chordTemplates[0].fingers, undefined);
     assert.deepStrictEqual(b.chordTemplates[0].frets, [0, 2, 2, 1, 0, 0]);
 });
@@ -609,7 +614,6 @@ test('computeChordFingers', () => {
 // safety valve: the search must terminate under a tiny budget, report
 // the abort, and behave identically to before when the budget is ample.
 test('solveChord: node budget pathological-chart safety valve', () => {
-    const { MAX_SEARCH_NODES } = CR;
     assert.ok(Number.isInteger(MAX_SEARCH_NODES) && MAX_SEARCH_NODES > 0, 'MAX_SEARCH_NODES sane');
 
     // A deliberately heavy search: 8-string wide-open target, an 8-note

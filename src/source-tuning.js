@@ -24,6 +24,12 @@ export const STANDARD_OPEN_STRING_MIDI = {
     8: [30, 35, 40, 45, 50, 55, 59, 64],
 };
 
+// Highest source-string count the chart format/base-pitch table can
+// represent. Counts 1-3 deliberately use the first strings of the
+// six-string fallback (useful for reduced fixtures and partial charts),
+// but anything above this would repeat the last guitar string forever.
+export const MAX_SOURCE_STRING_COUNT = 8;
+
 export function standardOpenStringMidi(stringCount) {
     return STANDARD_OPEN_STRING_MIDI[stringCount] || STANDARD_OPEN_STRING_MIDI[6];
 }

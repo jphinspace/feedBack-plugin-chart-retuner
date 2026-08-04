@@ -1,10 +1,15 @@
 // Chord playability regression suite: a retuned chord must stay as easy
 // to play as the source, not just pitch-exact. Reference shapes: https://www.guitarcommand.com/open-chords-guitar/
 import test from 'node:test';
-import assert from 'node:assert';
-import { CR } from '../src/chart-retune.js';
-
-const { createRetuner, fingersNeeded, isFretted, MAX_CHORD_SPAN, MAX_FRETTING_FINGERS, pitchClassOf } = CR;
+import assert from 'node:assert/strict';
+import { createRetuner } from '../src/retune-engine.js';
+import {
+    fingersNeeded,
+    isFretted,
+    MAX_CHORD_SPAN,
+    MAX_FRETTING_FINGERS,
+} from '../src/chord-solver.js';
+import { pitchClassOf } from '../src/pitch.js';
 
 const E_STD = [40, 45, 50, 55, 59, 64]; // E2 A2 D3 G3 B3 E4
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
