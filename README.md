@@ -134,11 +134,10 @@ to `screen.js`/`settings.html`:
 bash build-tailwind.sh
 ```
 
-**Tests** (the remap engine only — pure functions, no browser/DOM):
+**Tests** (all pure-logic modules, no browser/DOM):
 
 ```sh
-node test/retune-engine.test.mjs
-node test/chord-solver.test.mjs
+node --test test/*.test.mjs
 ```
 
 ## License

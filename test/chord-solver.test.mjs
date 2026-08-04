@@ -192,6 +192,24 @@ test('solveChord: exact-candidate identity acceptance', () => {
     assert.deepStrictEqual({ revoiced: r.revoiced, placements: r.placements }, { revoiced: false, placements: exact });
 });
 
+// A mandatory two-endpoint slide placement must take precedence over the
+// otherwise-valid exact chord shortcut. This is the solver-level guard for
+// alternate-string slide relocation.
+test('solveChord: exact candidate cannot bypass a fixed slide placement', () => {
+    const notes = v([[0, 5], [2, 2]]); // A2 + E3
+    const spec = chordSpecFromNotes(E_STD, notes, null);
+    const exact = [{ srcIndex: 0, s: 0, f: 5 }, { srcIndex: 1, s: 2, f: 2 }];
+    const fixed = { srcIndex: 0, s: 1, f: 0, entry: { s: 1, f: 0, sl: 2 } };
+    const r = solveChord(spec, E_STD, exact, 20, { fixedPlacements: [fixed] });
+    assert.ok(r, 'fixed-placement chord remains solvable');
+    assert.deepStrictEqual(r.revoiced, true, 'mismatched exact candidate is rejected');
+    assert.deepStrictEqual(
+        r.placements.find(placement => placement.srcIndex === 0),
+        fixed,
+        'searched voicing retains the complete fixed slide placement',
+    );
+});
+
 // Degradation: a 5-note guitar chord onto a 4-string bass target can
 // keep at most 4 notes; the solver still covers the chord's pitch
 // classes with root retained, within playability.
@@ -380,6 +398,58 @@ test('createRetuner: chord slide on a revoiced chord', () => {
     assert.deepStrictEqual(ns.map(n => n.sl - n.f), [2, 2]);
 });
 
+test('createRetuner: chart-capo slide pins both sounding pitches during chord revoicing', () => {
+    // Seven-string B/E notes both sound F#2 at the onset, forcing the
+    // ordinary chord path to revoice their collision. The slide's raw
+    // 0 -> 4 becomes sounding fret 2 -> 4 under the chart's capo 2.
+    const slide = { t: 0, s: 1, f: 0, sl: 4 };
+    const collision = { t: 0, s: 0, f: 7 };
+    const bundle = guitarBundle({
+        tuning: [0, 0, 0, 0, 0, 0, 0],
+        capo: 2,
+        notes: [slide, collision],
+    });
+    CR.createRetuner({
+        capoOutputMode: CR.CAPO_OUTPUT_MODES.CHART_TRANSFORM_CONTRACT,
+    }).apply(bundle, E_STD);
+
+    const remappedSlide = bundle.notes.find(note => note.origNote === slide);
+    assert.ok(remappedSlide);
+    assert.equal(remappedSlide.crRevoiced, true);
+    assert.deepStrictEqual(
+        { s: remappedSlide.s, f: remappedSlide.f, sl: remappedSlide.sl },
+        { s: 0, f: 2, sl: 4 },
+    );
+    assert.equal(E_STD[remappedSlide.s] + remappedSlide.f, 42);
+    assert.equal(E_STD[remappedSlide.s] + remappedSlide.sl, 44);
+});
+
+test('createRetuner: a pinned exact slide wins a one-string collision', () => {
+    const slide = { t: 0, s: 0, f: 0, sl: 2 };
+    const otherTone = { t: 0, s: 1, f: 0 };
+    const bundle = guitarBundle({ notes: [slide, otherTone] });
+
+    CR.createRetuner().apply(bundle, [40]);
+
+    assert.deepStrictEqual(bundle.notes.map(note => note.origNote), [slide]);
+    assert.deepStrictEqual(
+        { s: bundle.notes[0].s, f: bundle.notes[0].f, sl: bundle.notes[0].sl },
+        { s: 0, f: 0, sl: 2 },
+    );
+});
+
+test('createRetuner: an impossible exact slide is dropped, not shortened', () => {
+    const impossibleSlide = { t: 0, s: 0, f: 0, sl: 25 };
+    const playableTone = { t: 0, s: 1, f: 0 };
+    const bundle = guitarBundle({ notes: [impossibleSlide, playableTone] });
+
+    CR.createRetuner().apply(bundle, E_STD, 20);
+
+    assert.equal(bundle.notes.some(note => note.origNote === impossibleSlide), false);
+    assert.equal(bundle.notes.some(note => note.origNote === playableTone), true);
+    assert.equal(bundle.notes.some(note => Number.isInteger(note.sl) && note.sl >= 0), false);
+});
+
 // Bass regression through apply(): a clean simultaneous pair on the
 // default BEADG target behaves exactly as the pre-solver engine (the
 // exact candidate == the per-note remap), keeping techniques and
@@ -481,11 +551,10 @@ test('createRetuner: duplicate source strings dedup to one note per string', () 
 });
 
 // Sliding chords skip the template-first shortcut and keep remapSlide's
-// lower-endpoint anchoring. On this non-monotonic target the plain-fret
+// exact two-endpoint placement. On this non-monotonic target the plain-fret
 // template solve lands source string 1 on target string 0 at fret 20 —
-// but the downward slide's low endpoint anchors on string 1, which is
-// what the chord instance must follow (template route would have emitted
-// s:0 with a delta-clamped slu of 5).
+// the chord instance also uses target string 0 because it is the only
+// string that can sound both MIDI 60 -> 45 without endpoint clamping.
 test('createRetuner: sliding chords skip the template-first shortcut', () => {
     const tmpl = { name: 'X', frets: [-1, 15, -1, 0, -1, -1], fingers: [-1, -1, -1, -1, -1, -1] };
     const chord = { t: 0, id: 0, notes: [{ s: 1, f: 15, slu: 0 }, { s: 3, f: 0 }] };
@@ -493,7 +562,9 @@ test('createRetuner: sliding chords skip the template-first shortcut', () => {
     const b = guitarBundle({ chords: [chord], templates: [tmpl] });
     CR.createRetuner().apply(b, target);
     assert.deepStrictEqual(b.chords[0].notes.map(({ s, f, slu }) => ({ s, f, slu })).sort((a, b2) => a.s - b2.s),
-        [{ s: 1, f: 20, slu: 10 }, { s: 3, f: 0, slu: undefined }]);
+        [{ s: 0, f: 20, slu: 5 }, { s: 3, f: 0, slu: undefined }]);
+    assert.equal(target[0] + 20, E_STD[1] + 15);
+    assert.equal(target[0] + 5, E_STD[1]);
     assert.deepStrictEqual(b.chordTemplates[0].frets, [20, -1, -1, 0, -1, -1]);
 });
 

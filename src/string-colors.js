@@ -9,7 +9,7 @@ import { EXTENDED_DEFAULT_TARGET_TUNING } from './target-tuning.js';
 // Role per note in EXTENDED_DEFAULT_TARGET_TUNING, same order. Derived
 // from that single array rather than a second hardcoded MIDI table,
 // keeping the two permanently in sync.
-const EXTENDED_COLOR_ROLES = ['lowExt2', 'lowExt1', 'lowB', 'e', 'a', 'd', 'g', 'highB', 'highE'];
+const EXTENDED_COLOR_ROLES = ['lowExt2', 'lowExt1', 'lowB', 'e', 'a', 'd', 'g', 'highB', 'highE', 'gray'];
 const colorRoleByMidi = new Map(
     EXTENDED_DEFAULT_TARGET_TUNING.map((spec, i) => [parseTargetNote(spec).midi, EXTENDED_COLOR_ROLES[i]])
 );

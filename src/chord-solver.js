@@ -21,7 +21,7 @@
 // returns null.
 
 import { notePitchClass, pitchClassOf } from './pitch.js';
-import { DEFAULT_MAX_FRET } from './target-tuning.js';
+import { DEFAULT_MAX_FRET } from './common.js';
 
 // Max fretted-fret difference within one chord (a four-fret box). A
 // wider stretch is only allowed when the source chord itself carried
@@ -303,6 +303,10 @@ export function scoreVoicing(spec, voicing, registerFlexible = false) {
 // size is capped at the source note count. Returns
 // { voicing: [{ s, f, midi, pc }], cost } or null.
 //
+// opts.fixedPlacements (optional): exact target placements that must appear
+// in the voicing. Used for two-endpoint slide constraints; each carries its
+// source `srcIndex` and may carry a materialization `entry`.
+//
 // opts.budget (optional): a shared { nodes, aborted } counter, decremented
 // per DFS node — pass the SAME object across the solveChord ladder levels
 // to bound one chord's work as a whole. Omitted -> a fresh
@@ -315,6 +319,23 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
     const registerFlexible = !!(opts && opts.registerFlexible);
     const maxNotes = Math.min((opts && opts.maxNotes) || spec.noteCount, nStr);
     if (maxNotes < requiredPcs.size) return null;
+    const fixedByString = new Map();
+    const fixedPlacements = opts && Array.isArray(opts.fixedPlacements) ? opts.fixedPlacements : [];
+    for (const pl of fixedPlacements) {
+        if (!pl || !Number.isInteger(pl.s) || pl.s < 0 || pl.s >= nStr
+            || !Number.isInteger(pl.f) || pl.f < 0 || pl.f > maxFret
+            || fixedByString.has(pl.s)) return null;
+        const midi = target[pl.s] + pl.f;
+        fixedByString.set(pl.s, {
+            s: pl.s,
+            f: pl.f,
+            midi,
+            pc: pitchClassOf(midi),
+            srcIndex: pl.srcIndex,
+            entry: pl.entry,
+        });
+    }
+    if (fixedByString.size > maxNotes) return null;
     // Clamped so the position loop below always has at least p=1 (a
     // window covering the whole neck): a degenerate source span must
     // still widen the search while keeping the loop non-empty, since an
@@ -333,6 +354,16 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
     const chosen = [];
     for (const p of positions) {
         if (budget.nodes <= 0) { budget.aborted = true; break; }
+        // A fretted fixed note has to fit the same hand-position window as
+        // every other chord tone. Open fixed notes are position-independent.
+        let fixedFitsPosition = true;
+        for (const fixed of fixedByString.values()) {
+            if (isFretted(fixed.f) && (fixed.f < p || fixed.f > p + allowedSpan)) {
+                fixedFitsPosition = false;
+                break;
+            }
+        }
+        if (!fixedFitsPosition) continue;
         // Per-string candidates at this position: mute (null), the open
         // string when its pc qualifies, and every window fret whose pc
         // qualifies. Window frets start at the position itself — fret 0
@@ -340,6 +371,12 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
         const cands = [];
         for (let j = 0; j < nStr; j += 1) {
             const open = target[j];
+            const fixed = fixedByString.get(j);
+            if (fixed) {
+                const bit = pcBit.get(fixed.pc);
+                cands.push([{ ...fixed, bit: bit === undefined ? 0 : bit }]);
+                continue;
+            }
             const list = [null];
             const openBit = pcBit.get(pitchClassOf(open));
             if (openBit !== undefined) list.push({ s: j, f: 0, midi: open, pc: pitchClassOf(open), bit: openBit });
@@ -385,14 +422,32 @@ export function solveVoicingSearch(spec, requiredPcs, targetMidiTuning, opts, ma
 // Matches each solved target note back to a distinct source note (for
 // origNote scoring linkage and technique carry-over): exact MIDI match
 // first, then nearest same-pitch-class, then nearest by pitch, always
-// among not-yet-used source notes. Target notes are matched in ascending
-// pitch order for determinism. Returns [{ srcIndex, s, f }], srcIndex
+// among not-yet-used source notes. A target note carrying `srcIndex`
+// is pinned to that exact source note before ordinary matching. Within
+// the pinned and ordinary partitions, target notes are matched in ascending
+// pitch order for determinism. Returns
+// [{ srcIndex, s, f, entry? }], srcIndex
 // indexing the notes array chordSpecFromNotes was built from.
 export function matchVoicingToSource(voicing, spec) {
     const used = new Set();
-    const ordered = voicing.slice().sort((a, b) => a.midi - b.midi || a.s - b.s);
+    // Reserve pinned source notes first; otherwise an earlier ordinary note
+    // with the same pitch class could consume a slide's source identity.
+    const ordered = voicing.slice().sort((a, b) => {
+        const aPinned = Number.isInteger(a.srcIndex) ? 1 : 0;
+        const bPinned = Number.isInteger(b.srcIndex) ? 1 : 0;
+        return bPinned - aPinned || a.midi - b.midi || a.s - b.s;
+    });
     const placements = [];
     for (const n of ordered) {
+        if (Number.isInteger(n.srcIndex)) {
+            const pinned = spec.notes.find(source => source.idx === n.srcIndex);
+            if (!pinned || used.has(pinned.idx)) return null;
+            used.add(pinned.idx);
+            const placement = { srcIndex: pinned.idx, s: n.s, f: n.f };
+            if (n.entry) placement.entry = n.entry;
+            placements.push(placement);
+            continue;
+        }
         // Nearest not-yet-used source note passing `filter`; an exact
         // midi match is always distance 0, so this doubles as "first
         // exact match wins" for that case.
@@ -455,19 +510,30 @@ function allOpenCandidate(spec, requiredPcs, targetMidiTuning, registerFlexible)
 // degradeLevel } or null. `revoiced` is false only for the
 // exact-candidate path, where `degradeLevel` is always 0.
 //
+// opts.fixedPlacements (optional): exact source-indexed placements that
+// every searched voicing must retain (used for exact slide endpoints).
+//
 // opts.budget (optional): one { nodes, aborted } object shared across
 // every ladder level, bounding the whole chord's work. `aborted`
 // distinguishes "solver gave up" from a genuine unsoundable null.
 export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEFAULT_MAX_FRET, opts) {
     if (!spec || spec.notes.length === 0) return null;
+    const fixedPlacements = opts && Array.isArray(opts.fixedPlacements) ? opts.fixedPlacements : [];
     if (Array.isArray(exactCandidate) && exactCandidate.length === spec.notes.length) {
         const byIdx = new Map(spec.notes.map(n => [n.idx, n]));
         const identity = exactCandidate.every(pl => {
             const src = byIdx.get(pl.srcIndex);
             return src && src.s === pl.s && src.f === pl.f;
         });
+        // The cheap exact-candidate path must obey the same mandatory
+        // slide placements as the searched path below. Otherwise a chord
+        // that happens to be easy could bypass an alternate-string slide
+        // selected to preserve both sounding endpoints.
+        const fixedSatisfied = fixedPlacements.every(fixed => exactCandidate.some(pl => (
+            pl.srcIndex === fixed.srcIndex && pl.s === fixed.s && pl.f === fixed.f
+        )));
         const voicing = exactCandidate.map(pl => ({ s: pl.s, f: pl.f }));
-        if (identity || notHarderThanSource(voicing, spec)) {
+        if (fixedSatisfied && (identity || notHarderThanSource(voicing, spec))) {
             return { placements: exactCandidate, revoiced: false, degradeLevel: 0 };
         }
     }
@@ -477,7 +543,7 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
     const registerFlexible = spec.openCount > 0;
     let best = null;
     // Seed an all-open baseline for an open-voiced source; still has to win on cost below.
-    if (spec.openCount > 0) {
+    if (spec.openCount > 0 && fixedPlacements.length === 0) {
         const allOpen = allOpenCandidate(spec, spec.pcs, targetMidiTuning, registerFlexible);
         if (allOpen) {
             const placements = matchVoicingToSource(allOpen.voicing, spec);
@@ -487,7 +553,12 @@ export function solveChord(spec, targetMidiTuning, exactCandidate, maxFret = DEF
     const levels = degradationLadder(spec);
     for (let level = 0; level < levels.length; level += 1) {
         if (budget.nodes <= 0) { budget.aborted = true; break; }
-        const found = solveVoicingSearch(spec, levels[level], targetMidiTuning, { maxNotes: spec.noteCount, budget, registerFlexible }, maxFret);
+        const found = solveVoicingSearch(spec, levels[level], targetMidiTuning, {
+            maxNotes: spec.noteCount,
+            budget,
+            registerFlexible,
+            fixedPlacements,
+        }, maxFret);
         if (found) {
             const total = found.cost + level * W.DEGRADE_LEVEL;
             if (!best || total < best.total) {

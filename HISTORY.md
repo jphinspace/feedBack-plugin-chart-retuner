@@ -340,6 +340,68 @@ install leaves every chart in its original tuning until the player turns
 Retuning active on, matching the "opt in" framing the settings toggle and
 README already used to describe turning it *off*.
 
+**Phase 22 — Engine split into 5 single-responsibility stages
+(2026-08-03).** `retune-engine.js` bundled several genuinely independent
+transforms behind one file/test suite. Split into a 5-stage pipeline, each
+stage its own module: `target-tuning.js` (stage 1 — base target tuning
+from settings, unchanged), `target-capo.js` (stage 2, new — the retuner's
+own capo applied to the target: `applyCapo`/`effectiveMaxFret`),
+`source-tuning.js` (stage 3, new — the chart's own tuning/native-capo/
+octave-offset combined into source open-string pitches), `retune-engine.js`
+(stage 4 — note/chord remap via chord-solver, now also owns
+`computeArrangementShift`, which needs both stages' output), `note-anchors.js`
+(stage 5, from the prior split). `common.js` (new) holds the constants
+genuinely shared across stages (`DEFAULT_MAX_FRET` and the hand-position
+threshold used by stages 4 and 5). Behavior change with zero
+output difference: the octave offset used to be folded into the *target*
+tuning (`effectiveTargetMidiTuning`, removed); it's now applied on the
+*source* side (`computeOpenStringMidiByString`'s new `octaveOffset` param,
+threaded through `createRetuner().apply()`'s new 5th argument) — the two
+are pitch-equivalent everywhere the engine compares source to target,
+since only the difference between them ever matters, verified both by
+hand and by running the full suite before/after. `screen.js`'s
+`_transform()` updated to match (`CR.applyCapo(...)` replaces the old
+capo+octave fold; `active.octaveOffset` now passes straight through).
+Tests split the same way, one file per stage plus `string-colors.test.mjs`
+(stranded there, unrelated to the engine) and a shared `test/helpers.mjs`
+for fixtures reused across the split files. One-way dependency graph
+(stage N only imports what it needs from stages 1-3/`common.js`/
+`chord-solver.js`), zero external API change beyond the two noted above.
+
+**Phase 23 — Dual target-capo output projection (2026-08-03).** The
+retune engine now caches one canonical capo-relative solve and delegates
+the final host representation to `capo-output.js`. The centralized,
+non-user-facing `CAPO_OUTPUT_MODE` defaults to `physical-workaround`,
+preserving current production behavior: fretted notes, slide endpoints,
+anchors, and fretted template positions are shown at physical frets;
+capo-open notes/templates remain fret 0 for existing chord renderers;
+and the transform reports capo 0. The ready-but-disabled
+`chart-transform-contract` projection returns the canonical relative
+positions and reports the retuner capo separately. Both projections reuse
+the same strings, chord voicings, and fingerings, so changing host mode
+cannot trigger or contaminate a solve. Real slide endpoints at relative
+fret 0 project to the physical capo while `sl`/`slu === -1` sentinels stay
+untouched. Added pure and end-to-end coverage for both modes, projection
+cache isolation, chord/template/open-string behavior, slides in both
+directions, anchors, malformed-mode fallback, and malformed-chart
+pass-through.
+
+**Phase 24 — Exact two-endpoint slide remapping (2026-08-03).** Slides
+now preserve the sounding pitch of both endpoints instead of remapping
+the start and reconstructing the destination from its raw fret delta.
+That old shortcut was incorrect under a native chart capo and could also
+clamp an endpoint, silently changing the interval. The engine searches
+the natural target string and then neighboring strings for one on which
+both endpoints fit within the playable neck. In simultaneous groups,
+that exact placement is pinned while the chord solver revoices or drops
+ordinary chord tones around it. Competing slides search non-colliding
+string combinations within a fixed bound; if no complete combination is
+playable, the engine keeps the largest preferred exact subset. A slide
+with no target string capable of sounding both endpoints is dropped
+rather than emitting a musically false interval. Coverage includes chart
+capos, upward/downward slides, adjacent-string relocation, chord
+collisions, non-monotonic tunings, and impossible endpoints.
+
 ## Upstream sync log (historical — closed by Phase 19)
 
 Procedure: see PLANNING.md ("Syncing from upstream") — the pre-Phase-19

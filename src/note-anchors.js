@@ -4,9 +4,8 @@
 // module has no dependency back on how notes got remapped, only on the
 // result.
 
-import { DEFAULT_MAX_FRET } from './target-tuning.js';
+import { DEFAULT_MAX_FRET, HAND_JUMP_FRET_THRESHOLD } from './common.js';
 import { isFretted } from './chord-solver.js';
-import { HAND_JUMP_FRET_THRESHOLD } from './retune-engine.js';
 
 // How far past an anchor's time (in seconds) remapAnchors looks for an
 // exact-remap donor before settling for a revoiced one.

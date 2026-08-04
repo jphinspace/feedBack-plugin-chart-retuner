@@ -1,25 +1,12 @@
-// Chart Retuner — target tuning spec resolution & defaulting.
-// One of four modules chart-retune.js aggregates into `CR`. The chart-remap
-// math itself lives in retune-engine.js, which imports the constants below.
+// Chart Retuner — stage 1 (target tuning resolution) + the settings/profile
+// layer built on top of it: presets, custom-tuning validation, and the
+// capo/octave FIELD validators (is-this-a-legal-value, not what-effect-it-
+// has — that's target-capo.js/source-tuning.js). One of several pure-logic
+// modules chart-retune.js aggregates into `CR`.
 
-import { parseTargetNote, midiToNoteLabel, SEMITONES_PER_OCTAVE } from './pitch.js';
+import { parseTargetNote, midiToNoteLabel } from './pitch.js';
+import { DEFAULT_MAX_FRET } from './common.js';
 
-// Standard open-string MIDI pitches, low string first, by string count.
-// Same numbers as lib/song.py's _TUNING_BASE_MIDI; screen.js's renderer
-// base-MIDI table reuses this one rather than keeping its own copy.
-export const STANDARD_OPEN_STRING_MIDI = {
-    4: [28, 33, 38, 43],
-    5: [23, 28, 33, 38, 43],
-    6: [40, 45, 50, 55, 59, 64],
-    7: [35, 40, 45, 50, 55, 59, 64],
-    8: [30, 35, 40, 45, 50, 55, 59, 64],
-};
-
-// Engine fallback when a caller resolves no active tuning at all
-// (screen.js always threads a resolved profile's own maxFret through).
-// Also the pre-guitar hardcoded ceiling every preset/custom tuning
-// defaulted to before per-tuning max fret existed.
-export const DEFAULT_MAX_FRET = 20;
 // Selectable ceiling for a tuning profile's remap range (settings.html's
 // "Max fret" dropdown + each BUILTIN_PRESET_TUNINGS entry below). 24 is
 // the render/UI-safe top of the list, used as the fallback default.
@@ -74,22 +61,6 @@ export function applyRetunerCapoOctaveOverride(profile, override) {
     return profile;
 }
 
-// The open-string MIDI array the remap engine should actually match
-// against, given the profile's capo + octave offset. A capo raises each
-// sounding open pitch by `capo` half-steps; a +N octave offset is
-// applied as -12·N to the target, since the engine transposes by moving
-// the target rather than the chart. Callers pair this with
-// effectiveMaxFret below.
-export function effectiveTargetMidiTuning(midiTuning, capo, octaveOffset) {
-    const c = capo | 0;
-    const oct = octaveOffset | 0;
-    return midiTuning.map(m => m + c - SEMITONES_PER_OCTAVE * oct);
-}
-// Frets remaining above the capo. capo is validated < maxFret, so this
-// is always >= 1 for a valid profile.
-export function effectiveMaxFret(maxFret, capo) {
-    return Math.max(1, (maxFret | 0) - (capo | 0));
-}
 // 8 covers the widest built-in preset (mandolin's 4 doubled courses); 4 is
 // the practical floor for a fretted stringed instrument.
 export const MAX_TARGET_STRING_COUNT = 8;
@@ -103,7 +74,7 @@ export const DEFAULT_TARGET_TUNING = ['B0', 'E1', 'A1', 'D2', 'G2'];
 // Fallback chain for resolveTargetTuning (entries past index 4) and the
 // note->color-role table in string-colors.js. EXTENDED_CORE_INDEX is the
 // index of 'B0', so DEFAULT_TARGET_TUNING[i] === EXTENDED_DEFAULT_TARGET_TUNING[EXTENDED_CORE_INDEX + i].
-export const EXTENDED_DEFAULT_TARGET_TUNING = ['C#0', 'F#0', 'B0', 'E1', 'A1', 'D2', 'G2', 'B2', 'E3'];
+export const EXTENDED_DEFAULT_TARGET_TUNING = ['C#0', 'F#0', 'B0', 'E1', 'A1', 'D2', 'G2', 'B2', 'E3', 'A3'];
 export const EXTENDED_CORE_INDEX = 2;
 
 // Built-in tuning presets for the Active tuning dropdowns — not
@@ -408,60 +379,4 @@ const BEADG_TOP_STRING_MIDI = 43;
 export function defaultExtensionNote(direction, edgeMidi) {
     const midi = direction === 'low' ? edgeMidi - 5 : (edgeMidi === BEADG_TOP_STRING_MIDI ? edgeMidi + 4 : edgeMidi + 5);
     return { midi, label: midiToNoteLabel(midi) };
-}
-
-export function standardOpenStringMidi(stringCount) {
-    return STANDARD_OPEN_STRING_MIDI[stringCount] || STANDARD_OPEN_STRING_MIDI[6];
-}
-
-// Source string `s`'s open pitch under the chart's own tuning/capo.
-export function sourceOpenStringMidi(sourceStringCount, tuningOffsets, capo, s) {
-    if (!tuningOffsets || !(s >= 0 && s < tuningOffsets.length)) return null;
-    const base = standardOpenStringMidi(sourceStringCount);
-    const root = s < base.length ? base[s] : base[base.length - 1];
-    return root + (tuningOffsets[s] | 0) + (capo | 0);
-}
-
-export function computeOpenStringMidiByString(sourceStringCount, tuningOffsets, capo) {
-    const midiByString = [];
-    for (let s = 0; s < sourceStringCount; s += 1) {
-        midiByString.push(sourceOpenStringMidi(sourceStringCount, tuningOffsets, capo, s));
-    }
-    return midiByString;
-}
-
-// The shift k (target string = source string + k) that best aligns the
-// source strings with the target — most exact matches win, ties broken by
-// smallest total |adjustment| then smallest |k|. `sourceOpenMidiByString`
-// is optional, pass it when already computed.
-export function computeArrangementShift(sourceStringCount, tuningOffsets, capo, sourceOpenMidiByString, targetMidiTuning) {
-    const midiByString = sourceOpenMidiByString || computeOpenStringMidiByString(sourceStringCount, tuningOffsets, capo);
-    const target = targetMidiTuning || DEFAULT_TARGET_MIDI_TUNING;
-    let bestK = 0;
-    let bestExact = -1;
-    let bestTotalAbs = Infinity;
-    for (let k = 1 - sourceStringCount; k <= target.length - 1; k += 1) {
-        let exact = 0;
-        let totalAbs = 0;
-        let counted = 0;
-        for (let s = 0; s < sourceStringCount; s += 1) {
-            const j = s + k;
-            if (j < 0 || j >= target.length) continue;
-            const midi = midiByString[s];
-            if (midi === null) continue;
-            const adjustment = midi - target[j];
-            counted += 1;
-            totalAbs += Math.abs(adjustment);
-            if (adjustment === 0) exact += 1;
-        }
-        if (counted === 0) continue;
-        if (exact > bestExact
-            || (exact === bestExact && totalAbs < bestTotalAbs)
-            || (exact === bestExact && totalAbs === bestTotalAbs && Math.abs(k) < Math.abs(bestK))) {
-            bestExact = exact;
-            bestTotalAbs = totalAbs;
-            bestK = k;
-        }
-    }
-    return bestK;
 }

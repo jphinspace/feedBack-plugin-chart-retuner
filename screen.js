@@ -194,19 +194,21 @@ import { CR } from './src/chart-retune.js';
     // createRetuner()'s own cache actually hits instead of starting cold
     // every _transform(). Two instances since the two views' note arrays
     // differ, so sharing one would just evict the other's cache entry.
-    const _crFilteredRetuner = CR.createRetuner();
-    const _crAllRetuner = CR.createRetuner();
+    const _crCapoOutputMode = CR.CAPO_OUTPUT_MODE;
+    const _crFilteredRetuner = CR.createRetuner({ capoOutputMode: _crCapoOutputMode });
+    const _crAllRetuner = CR.createRetuner({ capoOutputMode: _crCapoOutputMode });
 
     // sourceTuning/sourceCapo/sourceStringCount describe the chart's own
-    // tuning; targetMidiTuning/maxFret fold in this plugin's retuner capo.
-    // retunerCapo is the engine's physical-fret display shift (see
-    // _transform() below for why frets are always physical).
-    function _applyRetune(retuner, notes, chords, anchors, chordTemplates, sourceTuning, sourceCapo, sourceStringCount, targetMidiTuning, maxFret, retunerCapo) {
+    // tuning; targetMidiTuning/maxFret fold in this plugin's retuner capo
+    // (stage 2). retunerCapo is consumed only by the final output
+    // projection (physical-host workaround vs. chart-transform contract);
+    // octaveOffset is stage 3's chart-side octave shift.
+    function _applyRetune(retuner, notes, chords, anchors, chordTemplates, sourceTuning, sourceCapo, sourceStringCount, targetMidiTuning, maxFret, retunerCapo, octaveOffset) {
         const bundle = {
             notes, chords, anchors: anchors || [], chordTemplates,
             tuning: sourceTuning, capo: sourceCapo, stringCount: sourceStringCount,
         };
-        retuner.apply(bundle, targetMidiTuning, maxFret, retunerCapo);
+        retuner.apply(bundle, targetMidiTuning, maxFret, retunerCapo, octaveOffset);
         return bundle;
     }
 
@@ -223,21 +225,19 @@ import { CR } from './src/chart-retune.js';
         if (!_crRoot || !_crRoot.isConnected) _crMountAdjustControls();
 
         const active = _resolveActiveTuning(arrClass);
-        const target = CR.resolveTargetTuning(active.strings);
+        const target = CR.resolveTargetTuning(active.strings); // stage 1
         // This plugin's own capo, distinct from the chart's native one
-        // (sourceCapo below) — a floor/ceiling constraint only; every fret
-        // returned is a true physical fret, never relabeled to either capo.
+        // (sourceCapo below). The solver uses it as a floor/ceiling
+        // constraint; the final capo-output projection decides whether the
+        // returned fret is relative or the current host's physical workaround.
         const retunerCapo = active.capoEnabled ? active.capo : 0;
-        const remapMidiTuning = (retunerCapo === 0 && active.octaveOffset === 0)
-            ? target.midiTuning
-            : CR.effectiveTargetMidiTuning(target.midiTuning, retunerCapo, active.octaveOffset);
-        const maxFret = CR.effectiveMaxFret(active.maxFret, retunerCapo);
+        const { midiTuning: remapMidiTuning, maxFret } = CR.applyCapo(target.midiTuning, active.maxFret, retunerCapo); // stage 2
 
         const filtered = _applyRetune(_crFilteredRetuner, input.notes, input.chords, input.anchors, input.chordTemplates,
-            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo);
+            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo, active.octaveOffset);
         const sameSet = input.allNotes === input.notes && input.allChords === input.chords;
         const all = sameSet ? filtered : _applyRetune(_crAllRetuner, input.allNotes, input.allChords, null, input.chordTemplates,
-            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo);
+            songInfo.tuning, songInfo.capo, input.stringCount, remapMidiTuning, maxFret, retunerCapo, active.octaveOffset);
 
         const n = target.midiTuning.length;
         const isBass = /\bbass\b/i.test(songInfo.arrangement || '');
@@ -253,8 +253,7 @@ import { CR } from './src/chart-retune.js';
             chordTemplates: filtered.chordTemplates,
             stringCount: n,
             tuning: tuningOffsets,
-            // Every fret above is already physical, so there's no capo left to report.
-            capo: 0,
+            capo: CR.capoForOutput(retunerCapo, _crCapoOutputMode),
         };
     }
 
